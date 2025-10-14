@@ -1,4 +1,4 @@
-# Zurg HTML Proxy
+# Zurg HTML Proxy and Media Player
 
 A Cloudflare Worker that proxies [Zurg](https://github.com/debridmediamonitor/zurg) and its basic HTML endpoint and .STRM files into a streamable video player interface.
 
@@ -7,7 +7,7 @@ A Cloudflare Worker that proxies [Zurg](https://github.com/debridmediamonitor/zu
 - styled file navigation with [Pico CSS](https://picocss.com/)
 - in-browser media playe with [Plyr](https://plyr.io/)
 - basic authentication
-- supports Tesla browser and full-screen theatre mode
+- supports Tesla web browser and full-screen theatre mode
 
 ## How It Works
 
@@ -49,6 +49,50 @@ wrangler deploy
 | `WORKER_USERNAME` | Worker username |
 | `WORKER_PASSWORD` | Worker password |
 
+## Tesla Browser Compatibility
+
+Tesla web browser (Chromium-based) includes support for:
+- video: `H.264`, `AVC`
+- video: `H.265`, `HEVC` · models with AMD Ryzen
+- audio: `AAC`
+- container: `MP4`, `WebM`
+
+> [!important]
+> **AAC Audio**<br>Tesla browsers work best with AAC audio tracks. AC3/EAC3 audio cannot be decoded. To ensure maximum compatibility, create a Zurg filter for AAC-encoded media.
+
+### Filter Files and Folders for `AAC`
+
+This configuration creates a directory of media that is likely AAC-compatible based on file or folder names alone.
+
+```yaml
+directories:
+  AAC audio:
+    group: media
+    filters:
+      - or:
+          - regex: /AAC/i
+          - any_file_inside_regex: /AAC/i
+```
+
+### Steering Wheel Controls
+
+- **Play/Pause** - Control playback from steering wheel buttons
+- **Seek Forward/Backward** - Skip 10 seconds forward or backward
+- **Media Metadata** - Displays title and folder name on screen
+
+The Media Session API is supported in all modern browsers including Tesla's Chromium-based browser.
+
+### Theatre Mode
+
+The **Tesla Theatre** button uses the [YouTube redirect](https://youtube.com/redirect?q=ttps://github.com/andesco/zurg-html-proxy) technique to initiate theatre mode from the Tesla web browser:
+
+- hides browser controls
+- enables full screen videos
+- uses [Media Session API](https://developer.mozilla.org/en-US/docs/Web/API/Media_Session_API) to enable steering-wheel controls and on-screen metadata
+
+```javascript
+fullscreenLink.href = 'https://youtube.com/redirect?q=' + encodeURIComponent(videoUrl);
+```
 
 ## Technical Details
 
@@ -72,4 +116,4 @@ Browser ← Cloudflare Worker ← Real-Debrid media cache
           
 ```
 > [!important]
-> All video data streams through the Worker, but uses `Response.body` passthrough for minimal CPU usage and unlimited bandwidth.
+> **`Response.body`**<br>All video data streams through the Worker, but uses `Response.body` passthrough for minimal CPU usage and unlimited bandwidth.
