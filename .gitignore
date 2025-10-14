@@ -1,0 +1,7 @@
+.wrangler/
+wrangler.dev.toml
+wrangler.local.toml
+node_modules/
+*.md
+!README.md
+!readme.md

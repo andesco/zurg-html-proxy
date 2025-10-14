@@ -1,0 +1,26 @@
+{
+	"name": "zurg-webdav-proxy",
+	"version": "1.0.0",
+	"description": "Cloudflare Worker to proxy Zurg HTML endpoint and link the contents of .STRM files",
+	"main": "index.js",
+	"scripts": {
+		"dev": "wrangler dev",
+		"deploy": "wrangler deploy",
+		"dev:local": "wrangler dev --config wrangler.local.toml",
+		"deploy:local": "wrangler deploy --config wrangler.local.toml"
+	},
+	"keywords": [
+		"cloudflare",
+		"worker",
+		"webdav",
+		"zurg",
+		"infuse",
+		"proxy"
+	],
+	"author": "andesco",
+	"license": "MIT",
+	"devDependencies": {
+		"@cloudflare/workers-types": "^4.20241127.0",
+		"wrangler": "^3.0.0"
+	}
+}

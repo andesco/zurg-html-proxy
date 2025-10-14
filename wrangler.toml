@@ -1,0 +1,17 @@
+name = "zurg-html-proxy"
+account_id = ""
+main = "index.js"
+compatibility_date = "2024-07-01"
+compatibility_flags = ["nodejs_compat"]
+#workers_dev = false
+
+# [vars]
+# ZURG_BASE_URL = ""
+# ZURG_USERNAME = ""
+# ZURG_PASSWORD = ""
+# WORKER_USERNAME = ""
+# WORKER_PASSWORD = ""
+
+# [[routes]]
+# pattern = "html.zurg.example.com"
+# custom_domain = true
