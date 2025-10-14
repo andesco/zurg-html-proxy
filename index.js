@@ -130,10 +130,10 @@ export default {
 <body>
 <main class="container">
 <article>
-<h1>Welcome to Zurg HTML Proxy</h1>
-<p>This proxy server provides HTML browsing for your Zurg media files.</p>
-<a href="/http/" role="button">Browse Files</a>
-<a id="fullscreen-link" href="" role="button">Full Screen</a>
+ <h1>Zurg HTML Proxy and Media Player</h1>
+ <p>This proxy server provides HTML browsing for your Zurg media files.</p>
+ <a href="/http/" role="button">Browse Files</a>
+ <a id="fullscreen-link" href="" role="button" title="enable full-screen via YouTube.com redirect">Tesla Theatre</a>
 </article>
 </main>
 <script>
@@ -199,11 +199,12 @@ export default {
 <title>${filename}</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
 <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
-<style>
-  .plyr {
-    max-width: 800px;
-  }
-</style>
+ <style>
+   .plyr {
+     max-width: 800px;
+     --plyr-control-icon-size: 36px;  /* 2x default (18px) for better touch targets */
+   }
+ </style>
 </head>
 <body>
 <main class="container">
@@ -212,40 +213,53 @@ export default {
 <h1>${filename}</h1>
 <h2>${folder}</h2>
 </hgroup>
-<video id="player" controls crossorigin playsinline>
-  <source src="/video-proxy?url=${encodeURIComponent(finalVideoUrl)}" type="video/mp4" />
-</video>
-<p><small>Video URL (with auth):</small></p>
-<p><code>${authenticatedUrl}</code></p>
-<button id="copy-button" class="secondary">Copy URL</button>
-<a id="fullscreen-link" href="" role="button" target="_blank">Full Screen</a>
+ <video id="player" controls crossorigin playsinline>
+   <source src="/video-proxy?url=${encodeURIComponent(finalVideoUrl)}" type="video/mp4" />
+ </video>
+ <p style="margin-top: 1rem;"><small>video cache URL:</small><br> <code>${authenticatedUrl}</code></p>
+ <button id="copy-button" class="secondary" style="min-width: 80px;">Copy URL</button>
 </article>
 </main>
 <script src="https://cdn.plyr.io/3.7.8/plyr.polyfilled.js"></script>
 <script>
   const copyButton = document.getElementById('copy-button');
-  const fullscreenLink = document.getElementById('fullscreen-link');
 
-  // Set fullscreen link with authenticated URL
-  fullscreenLink.href = '${authenticatedUrl}';
-
-  // Initialize Plyr
+  // Initialize Plyr with keyboard shortcuts
   const player = new Plyr('#player', {
-    controls: ['play-large', 'play', 'progress', 'current-time', 'mute', 'volume', 'settings', 'fullscreen'],
-    settings: ['quality', 'speed']
+    controls: ['play-large', 'play', 'progress', 'current-time', 'mute', 'volume', 'captions', 'settings', 'fullscreen'],
+    settings: ['captions', 'quality'],
+    keyboard: { focused: true, global: true }
   });
 
-  player.on('ready', () => console.log('Player ready'));
+  // Media Session API for Tesla steering wheel controls
+  player.on('ready', () => {
+    console.log('Player ready');
+
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: '${filename}',
+        artist: '${folder}',
+        album: 'Zurg Media'
+      });
+
+      navigator.mediaSession.setActionHandler('play', () => player.play());
+      navigator.mediaSession.setActionHandler('pause', () => player.pause());
+      navigator.mediaSession.setActionHandler('seekbackward', () => player.rewind(10));
+      navigator.mediaSession.setActionHandler('seekforward', () => player.forward(10));
+      console.log('Media Session API initialized for steering wheel controls');
+    }
+  });
+
   player.on('play', () => console.log('Playing'));
   player.on('pause', () => console.log('Paused'));
 
-  copyButton.addEventListener('click', () => {
-    navigator.clipboard.writeText('${authenticatedUrl}');
-    copyButton.textContent = 'Copied!';
-    setTimeout(() => {
-      copyButton.textContent = 'Copy URL';
-    }, 2000);
-  });
+   copyButton.addEventListener('click', () => {
+     navigator.clipboard.writeText('${authenticatedUrl}');
+     copyButton.textContent = 'Copied';
+     setTimeout(() => {
+       copyButton.textContent = 'Copy URL';
+     }, 2000);
+   });
 </script>
 </body>
 </html>`;
