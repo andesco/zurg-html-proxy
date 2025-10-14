@@ -6,7 +6,7 @@
 	"scripts": {
 		"dev": "wrangler dev",
 		"deploy": "wrangler deploy",
-		"dev:local": "wrangler dev --config wrangler.local.toml",
+		"dev:local": "wrangler dev --config wrangler.local.toml --live-reload",
 		"deploy:local": "wrangler deploy --config wrangler.local.toml"
 	},
 	"keywords": [

@@ -53,6 +53,7 @@ export default {
 
         console.log('Video response status:', videoResponse.status);
         console.log('Video response headers:', Object.fromEntries(videoResponse.headers));
+        console.log('Original content-type:', videoResponse.headers.get('content-type'));
 
         // Build response headers with CORS
         const responseHeaders = new Headers();
@@ -78,15 +79,16 @@ export default {
           responseHeaders.set('Accept-Ranges', 'bytes');
         }
 
-        // Set proper video content type (not force-download) and CORS headers
+        // Set standard HTML5 video content type and CORS headers
         responseHeaders.set('Content-Type', 'video/mp4');
+        responseHeaders.set('Content-Disposition', 'inline');
         responseHeaders.set('Access-Control-Allow-Origin', '*');
+        responseHeaders.set('Cache-Control', 'public, max-age=3600');
         responseHeaders.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
         responseHeaders.set('Access-Control-Allow-Headers', 'Range');
         responseHeaders.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
 
-        // Prevent caching issues
-        responseHeaders.set('Cache-Control', 'public, max-age=31536000');
+
 
         console.log('Returning headers:', Object.fromEntries(responseHeaders));
 
@@ -174,21 +176,14 @@ export default {
       let finalVideoUrl = strmContent;
       console.log('Video URL from .strm:', finalVideoUrl);
 
-      // Create authenticated URL by injecting credentials
-      let authenticatedUrl = finalVideoUrl;
-      try {
-        const urlObj = new URL(finalVideoUrl);
-        urlObj.username = env.ZURG_USERNAME;
-        urlObj.password = env.ZURG_PASSWORD;
-        authenticatedUrl = urlObj.toString();
-      } catch (e) {
-        console.error('Failed to add auth to URL:', e);
-      }
-
       // Get path parts and decode them
       const pathParts = path.split('/').filter(p => p);
       const folder = pathParts.length > 2 ? decodeURIComponent(pathParts[pathParts.length - 2]) : '';
       const filename = decodeURIComponent(pathParts[pathParts.length - 1].replace('.strm', '')).replace(/\./g, ' ');
+
+      // Check for player mode
+      const requestUrl = new URL(request.url);
+      const isHtml5 = requestUrl.searchParams.get('player') === 'html5';
 
       const html = `<!DOCTYPE html>
 <html>
@@ -198,9 +193,9 @@ export default {
 <meta name="color-scheme" content="light dark">
 <title>${filename}</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
-<link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
+${isHtml5 ? '' : '<link rel="stylesheet" href="https://cdn.plyr.io/3.7.7/plyr.css" />'}
  <style>
-   .plyr {
+   .plyr, video {
      max-width: 800px;
      --plyr-control-icon-size: 36px;  /* 2x default (18px) for better touch targets */
    }
@@ -213,17 +208,18 @@ export default {
 <h1>${filename}</h1>
 <h2>${folder}</h2>
 </hgroup>
- <video id="player" controls crossorigin playsinline>
-   <source src="/video-proxy?url=${encodeURIComponent(finalVideoUrl)}" type="video/mp4" />
- </video>
- <p style="margin-top: 1rem;"><small>video cache URL:</small><br> <code>${authenticatedUrl}</code></p>
+ <video ${isHtml5 ? '' : 'id="player"'} controls crossorigin playsinline src="/video-proxy?url=${encodeURIComponent(finalVideoUrl)}"></video>
+ <p style="margin-top: 1rem;"><small>video cache URL:</small><br> <code>${finalVideoUrl}</code></p>
  <button id="copy-button" class="secondary" style="min-width: 80px;">Copy URL</button>
+ <button id="switch-player" class="secondary">${isHtml5 ? 'PLYR' : 'HTML5'}</button>
 </article>
 </main>
-<script src="https://cdn.plyr.io/3.7.8/plyr.polyfilled.js"></script>
+${isHtml5 ? '' : '<script src="https://cdn.plyr.io/3.7.7/plyr.polyfilled.js"></script>'}
 <script>
   const copyButton = document.getElementById('copy-button');
+  const switchButton = document.getElementById('switch-player');
 
+  ${isHtml5 ? '' : `
   // Initialize Plyr with keyboard shortcuts
   const player = new Plyr('#player', {
     controls: ['play-large', 'play', 'progress', 'current-time', 'mute', 'volume', 'captions', 'settings', 'fullscreen'],
@@ -231,35 +227,28 @@ export default {
     keyboard: { focused: true, global: true }
   });
 
-  // Media Session API for Tesla steering wheel controls
-  player.on('ready', () => {
-    console.log('Player ready');
-
-    if ('mediaSession' in navigator) {
-      navigator.mediaSession.metadata = new MediaMetadata({
-        title: '${filename}',
-        artist: '${folder}',
-        album: 'Zurg Media'
-      });
-
-      navigator.mediaSession.setActionHandler('play', () => player.play());
-      navigator.mediaSession.setActionHandler('pause', () => player.pause());
-      navigator.mediaSession.setActionHandler('seekbackward', () => player.rewind(10));
-      navigator.mediaSession.setActionHandler('seekforward', () => player.forward(10));
-      console.log('Media Session API initialized for steering wheel controls');
-    }
-  });
-
+  player.on('ready', () => console.log('Player ready'));
   player.on('play', () => console.log('Playing'));
   player.on('pause', () => console.log('Paused'));
+  `}
 
-   copyButton.addEventListener('click', () => {
-     navigator.clipboard.writeText('${authenticatedUrl}');
-     copyButton.textContent = 'Copied';
-     setTimeout(() => {
-       copyButton.textContent = 'Copy URL';
-     }, 2000);
-   });
+  copyButton.addEventListener('click', () => {
+    navigator.clipboard.writeText('${finalVideoUrl}');
+    copyButton.textContent = 'Copied';
+    setTimeout(() => {
+      copyButton.textContent = 'Copy URL';
+    }, 2000);
+  });
+
+  switchButton.addEventListener('click', () => {
+    const url = new URL(window.location);
+    if (${isHtml5}) {
+      url.searchParams.delete('player');
+    } else {
+      url.searchParams.set('player', 'html5');
+    }
+    window.location.href = url.toString();
+  });
 </script>
 </body>
 </html>`;
