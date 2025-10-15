@@ -118,6 +118,8 @@ export default {
       }
     }
 
+
+
     // Show landing page at root
     if (path === '/') {
       const html = `<!DOCTYPE html>
@@ -199,6 +201,12 @@ ${isHtml5 ? '' : '<link rel="stylesheet" href="https://cdn.plyr.io/3.7.7/plyr.cs
      max-width: 800px;
      --plyr-control-icon-size: 36px;  /* 2x default (18px) for better touch targets */
    }
+
+   .copied {
+     background-color: #4CAF50 !important;
+     border-color: #4CAF50 !important;
+     color: white !important;
+   }
  </style>
 </head>
 <body>
@@ -211,12 +219,14 @@ ${isHtml5 ? '' : '<link rel="stylesheet" href="https://cdn.plyr.io/3.7.7/plyr.cs
  <video ${isHtml5 ? '' : 'id="player"'} controls crossorigin playsinline src="/video-proxy?url=${encodeURIComponent(finalVideoUrl)}"></video>
  <p style="margin-top: 1rem;"><small>video cache URL:</small><br> <code>${finalVideoUrl}</code></p>
  <button id="copy-button" class="secondary" style="min-width: 80px;">Copy URL</button>
- <button id="switch-player" class="secondary">${isHtml5 ? 'PLYR' : 'HTML5'}</button>
-</article>
+ <button id="download-button" class="secondary" style="min-width: 80px;">Download Media</button>
+ <button id="switch-player" class="secondary">${isHtml5 ? 'PLYR' : 'HTML5'}</article>
 </main>
 ${isHtml5 ? '' : '<script src="https://cdn.plyr.io/3.7.7/plyr.polyfilled.js"></script>'}
 <script>
+  const finalVideoUrl = "${finalVideoUrl}";
   const copyButton = document.getElementById('copy-button');
+  const downloadButton = document.getElementById('download-button');
   const switchButton = document.getElementById('switch-player');
 
   ${isHtml5 ? '' : `
@@ -233,11 +243,22 @@ ${isHtml5 ? '' : '<script src="https://cdn.plyr.io/3.7.7/plyr.polyfilled.js"></s
   `}
 
   copyButton.addEventListener('click', () => {
-    navigator.clipboard.writeText('${finalVideoUrl}');
+    navigator.clipboard.writeText(finalVideoUrl);
+    const originalWidth = copyButton.offsetWidth;
+    copyButton.style.width = originalWidth + 'px';
     copyButton.textContent = 'Copied';
+    copyButton.classList.add('copied');
     setTimeout(() => {
       copyButton.textContent = 'Copy URL';
-    }, 2000);
+      copyButton.classList.remove('copied');
+      copyButton.style.width = '';
+    }, 3000);
+  });
+
+  downloadButton.addEventListener('click', () => {
+    if (confirm('Are you sure you want to download this file?')) {
+      window.location.href = finalVideoUrl;
+    }
   });
 
   switchButton.addEventListener('click', () => {
