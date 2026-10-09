@@ -172,8 +172,14 @@ export default {
       return new Response(html, { headers: { 'Content-Type': 'text/html' } });
     }
 
-    // Build Zurg URL
-    const zurgUrl = env.ZURG_BASE_URL + path;
+    // Build the upstream URL without duplicating the `/http` mount point.
+    // Existing deployments use either `https://zurg.example` or
+    // `https://zurg.example/http` for ZURG_BASE_URL.
+    const zurgBaseUrl = (env.ZURG_BASE_URL || '').replace(/\/+$/, '');
+    const upstreamPath = zurgBaseUrl.endsWith('/http') && path.startsWith('/http')
+      ? path.slice('/http'.length) || '/'
+      : path;
+    const zurgUrl = zurgBaseUrl + upstreamPath;
 
     const headers = new Headers(request.headers);
     headers.delete('Authorization'); // Remove worker auth header
