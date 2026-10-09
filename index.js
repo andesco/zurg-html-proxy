@@ -16,7 +16,7 @@ export default {
     const decoded = atob(credentials);
     const [username, password] = decoded.split(':');
 
-    console.log('Auth attempt:', { username, password, expected_user: env.WORKER_USERNAME, expected_pass: env.WORKER_PASSWORD });
+    console.log('Auth attempt for username:', username);
 
     if (username !== env.WORKER_USERNAME || password !== env.WORKER_PASSWORD) {
       return new Response('Unauthorized', { status: 401 });
@@ -36,17 +36,33 @@ export default {
       console.log('Video proxy request for:', videoUrl);
 
       try {
+        // Handle preflight without downloading the media. Keep these headers
+        // identical for the native and Plyr-backed players.
+        const corsHeaders = new Headers({
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+          'Access-Control-Allow-Headers': 'Range, If-Range',
+          'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges, Content-Type, ETag'
+        });
+
+        if (request.method === 'OPTIONS') {
+          return new Response(null, { status: 204, headers: corsHeaders });
+        }
+
         const videoHeaders = new Headers();
 
-        // Forward Range header for seeking support
-        const rangeHeader = request.headers.get('Range');
-        if (rangeHeader) {
-          videoHeaders.set('Range', rangeHeader);
-          console.log('Forwarding Range header:', rangeHeader);
+        // Forward byte-range headers for seeking and media metadata probing.
+        for (const header of ['Range', 'If-Range']) {
+          const value = request.headers.get(header);
+          if (value) {
+            videoHeaders.set(header, value);
+            console.log(`Forwarding ${header} header:`, value);
+          }
         }
 
         console.log('Fetching video from:', videoUrl);
         const videoResponse = await fetch(videoUrl, {
+          method: request.method === 'HEAD' ? 'HEAD' : 'GET',
           headers: videoHeaders,
           redirect: 'follow'
         });
@@ -55,11 +71,14 @@ export default {
         console.log('Video response headers:', Object.fromEntries(videoResponse.headers));
         console.log('Original content-type:', videoResponse.headers.get('content-type'));
 
-        // Build response headers with CORS
-        const responseHeaders = new Headers();
+        // Build response headers with CORS. Preserve the upstream media type:
+        // forcing every file to video/mp4 makes MKV/WebM files look like a
+        // corrupt MP4 and can prevent their audio tracks from being exposed.
+        const responseHeaders = new Headers(corsHeaders);
 
-        // Essential headers for video streaming (excluding content-disposition)
+        // Essential headers for streaming and byte-range playback.
         const headersToForward = [
+          'content-type',
           'content-length',
           'content-range',
           'accept-ranges',
@@ -74,28 +93,32 @@ export default {
           }
         }
 
-        // Ensure Accept-Ranges is set (required for Safari video streaming)
+        // A few upstreams omit this even though they honor Range requests.
         if (!responseHeaders.has('accept-ranges')) {
           responseHeaders.set('Accept-Ranges', 'bytes');
         }
 
-        // Set standard HTML5 video content type and CORS headers
-        responseHeaders.set('Content-Type', 'video/mp4');
+        // Infer the type only when the upstream is silent or generic. This
+        // keeps the old MP4 behavior while allowing compatible browsers to
+        // recognize MKV/WebM sources correctly.
+        const upstreamContentType = videoResponse.headers.get('content-type') || '';
+        if (!upstreamContentType || upstreamContentType.toLowerCase().startsWith('application/octet-stream')) {
+          const pathname = new URL(videoUrl).pathname.toLowerCase();
+          const inferredContentType = pathname.endsWith('.mkv')
+            ? 'video/x-matroska'
+            : pathname.endsWith('.webm')
+              ? 'video/webm'
+              : pathname.endsWith('.mov')
+                ? 'video/quicktime'
+                : 'video/mp4';
+          responseHeaders.set('Content-Type', inferredContentType);
+        }
+
         responseHeaders.set('Content-Disposition', 'inline');
-        responseHeaders.set('Access-Control-Allow-Origin', '*');
-        responseHeaders.set('Cache-Control', 'public, max-age=3600');
-        responseHeaders.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-        responseHeaders.set('Access-Control-Allow-Headers', 'Range');
-        responseHeaders.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
-
-
+        // Do not let a shared cache reuse a 206 response for another range.
+        responseHeaders.set('Cache-Control', 'no-store');
 
         console.log('Returning headers:', Object.fromEntries(responseHeaders));
-
-        // Handle OPTIONS preflight
-        if (request.method === 'OPTIONS') {
-          return new Response(null, { status: 204, headers: responseHeaders });
-        }
 
         // Handle HEAD requests (Safari uses these to check Range support)
         if (request.method === 'HEAD') {
@@ -186,6 +209,8 @@ export default {
       // Check for player mode
       const requestUrl = new URL(request.url);
       const isHtml5 = requestUrl.searchParams.get('player') === 'html5';
+      // Keep the direct URL safe when embedding it in the generated script.
+      const finalVideoUrlScript = JSON.stringify(finalVideoUrl).replace(/</g, '\\u003c');
 
       const html = `<!DOCTYPE html>
 <html>
@@ -207,6 +232,23 @@ ${isHtml5 ? '' : '<link rel="stylesheet" href="https://cdn.plyr.io/3.7.7/plyr.cs
      border-color: #4CAF50 !important;
      color: white !important;
    }
+
+   .audio-track-picker {
+     max-width: 800px;
+     margin: 1rem 0;
+   }
+
+   #audio-track-status {
+     display: block;
+     min-height: 1.25rem;
+     margin-top: 0.35rem;
+   }
+
+   #audio-output-status {
+     display: block;
+     min-height: 1.25rem;
+     margin-top: 0.35rem;
+   }
  </style>
 </head>
 <body>
@@ -216,18 +258,37 @@ ${isHtml5 ? '' : '<link rel="stylesheet" href="https://cdn.plyr.io/3.7.7/plyr.cs
 <h1>${filename}</h1>
 <h2>${folder}</h2>
 </hgroup>
- <video ${isHtml5 ? '' : 'id="player"'} controls crossorigin playsinline src="/video-proxy?url=${encodeURIComponent(finalVideoUrl)}"></video>
+ <video id="player" controls crossorigin playsinline src="/video-proxy?url=${encodeURIComponent(finalVideoUrl)}"></video>
+ <fieldset class="audio-track-picker">
+   <label for="audio-track-select">Audio track</label>
+   <select id="audio-track-select" disabled>
+     <option>Detecting audio tracks…</option>
+   </select>
+   <small id="audio-track-status" role="status"></small>
+   <label for="audio-output-select">Audio output</label>
+   <select id="audio-output-select">
+     <option value="stereo" selected>Stereo downmix (includes centre/dialogue)</option>
+     <option value="original">Original channel layout</option>
+   </select>
+   <small id="audio-output-status" role="status">Stereo downmix will be enabled when playback starts.</small>
+ </fieldset>
  <p style="margin-top: 1rem;"><small>video cache URL:</small><br> <code>${finalVideoUrl}</code></p>
  <button id="copy-button" class="secondary" style="min-width: 80px;">Copy URL</button>
  <button id="download-button" class="secondary" style="min-width: 80px;">Download Media</button>
- <button id="switch-player" class="secondary">${isHtml5 ? 'PLYR' : 'HTML5'}</article>
+ <button id="switch-player" class="secondary">${isHtml5 ? 'PLYR' : 'HTML5'}</button>
+</article>
 </main>
 ${isHtml5 ? '' : '<script src="https://cdn.plyr.io/3.7.7/plyr.polyfilled.js"></script>'}
 <script>
-  const finalVideoUrl = "${finalVideoUrl}";
+  const finalVideoUrl = ${finalVideoUrlScript};
+  const media = document.getElementById('player');
   const copyButton = document.getElementById('copy-button');
   const downloadButton = document.getElementById('download-button');
   const switchButton = document.getElementById('switch-player');
+  const audioTrackSelect = document.getElementById('audio-track-select');
+  const audioTrackStatus = document.getElementById('audio-track-status');
+  const audioOutputSelect = document.getElementById('audio-output-select');
+  const audioOutputStatus = document.getElementById('audio-output-status');
 
   ${isHtml5 ? '' : `
   // Initialize Plyr with keyboard shortcuts
@@ -241,6 +302,191 @@ ${isHtml5 ? '' : '<script src="https://cdn.plyr.io/3.7.7/plyr.polyfilled.js"></s
   player.on('play', () => console.log('Playing'));
   player.on('pause', () => console.log('Paused'));
   `}
+
+  // Plyr and the native HTML5 controls both use the same media element. The
+  // standard AudioTrackList API is the only browser API that can switch
+  // embedded MP4/MKV audio tracks without downloading or transcoding the file.
+  function getAudioTracks() {
+    try {
+      const tracks = media.audioTracks;
+      if (!tracks || typeof tracks.length !== 'number') return null;
+
+      const result = [];
+      for (let index = 0; index < tracks.length; index += 1) {
+        result.push(tracks[index]);
+      }
+      return result;
+    } catch (error) {
+      console.warn('Unable to read audio tracks:', error);
+      return null;
+    }
+  }
+
+  function getAudioTrackLabel(track, index) {
+    const label = track.label || track.language || track.kind || ('Track ' + (index + 1));
+    const language = track.label && track.language ? ' (' + track.language + ')' : '';
+    return label + language;
+  }
+
+  function refreshAudioTrackPicker() {
+    const tracks = getAudioTracks();
+
+    if (tracks === null) {
+      audioTrackSelect.replaceChildren(new Option('Track selection unavailable', ''));
+      audioTrackSelect.disabled = true;
+      audioTrackStatus.textContent = 'This browser does not expose embedded audio-track switching.';
+      return;
+    }
+
+    if (tracks.length === 0) {
+      audioTrackSelect.replaceChildren(new Option('No embedded audio tracks detected', ''));
+      audioTrackSelect.disabled = true;
+      audioTrackStatus.textContent = 'The media has not exposed a selectable audio track yet.';
+      return;
+    }
+
+    let selectedIndex = tracks.findIndex(track => track.enabled);
+    if (selectedIndex < 0) selectedIndex = 0;
+
+    audioTrackSelect.replaceChildren(...tracks.map((track, index) => {
+      const option = new Option(getAudioTrackLabel(track, index), String(index));
+      option.selected = index === selectedIndex;
+      return option;
+    }));
+    audioTrackSelect.disabled = false;
+    audioTrackSelect.value = String(selectedIndex);
+    audioTrackStatus.textContent = tracks.length + ' embedded audio track' + (tracks.length === 1 ? '' : 's') + ' detected.';
+  }
+
+  audioTrackSelect.addEventListener('change', () => {
+    const tracks = getAudioTracks();
+    const selectedIndex = Number(audioTrackSelect.value);
+    if (!tracks || !tracks[selectedIndex]) return;
+
+    try {
+      tracks.forEach((track, index) => {
+        track.enabled = index === selectedIndex;
+      });
+      refreshAudioTrackPicker();
+    } catch (error) {
+      console.warn('Unable to select audio track:', error);
+      audioTrackStatus.textContent = 'This browser reported the tracks but would not switch them.';
+    }
+  });
+
+  ['loadedmetadata', 'loadeddata', 'durationchange', 'canplay'].forEach(eventName => {
+    media.addEventListener(eventName, refreshAudioTrackPicker);
+  });
+
+  const audioTracks = getAudioTracks();
+  if (audioTracks && typeof media.audioTracks.addEventListener === 'function') {
+    ['addtrack', 'removetrack', 'change'].forEach(eventName => {
+      media.audioTracks.addEventListener(eventName, refreshAudioTrackPicker);
+    });
+  }
+  refreshAudioTrackPicker();
+
+  // A common compatibility problem is a single AAC 5.1 track: browsers that
+  // output only stereo can omit the centre channel, where dialogue normally
+  // lives. Route the media through Web Audio and offer a standard stereo
+  // downmix that folds centre/surround/LFE into left and right. The original
+  // layout remains available for devices that can decode it correctly.
+  let audioGraph = null;
+
+  function ensureAudioGraph() {
+    if (audioGraph) return audioGraph;
+
+    const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextConstructor) {
+      audioOutputSelect.disabled = true;
+      audioOutputStatus.textContent = 'Web Audio is unavailable; using the browser default.';
+      return null;
+    }
+
+    let context;
+    let source;
+    try {
+      context = new AudioContextConstructor();
+      source = context.createMediaElementSource(media);
+
+      const originalGain = context.createGain();
+      const downmixGain = context.createGain();
+      const splitter = context.createChannelSplitter(8);
+      const merger = context.createChannelMerger(2);
+
+      source.connect(originalGain);
+      originalGain.connect(context.destination);
+      source.connect(splitter);
+
+      // ISO/WAVE channel order: FL, FR, FC, LFE, BL/SL, BR/SR, plus the
+      // optional back-surround pair. A 0.707 coefficient is the standard
+      // equal-power fold-down for centre and surround channels.
+      const routes = [
+        [0, 0, 1],
+        [1, 1, 1],
+        [2, 0, 0.7071],
+        [2, 1, 0.7071],
+        [3, 0, 0.5],
+        [3, 1, 0.5],
+        [4, 0, 0.7071],
+        [5, 1, 0.7071],
+        [6, 0, 0.5],
+        [7, 1, 0.5]
+      ];
+
+      routes.forEach(([input, output, gainValue]) => {
+        const gain = context.createGain();
+        gain.gain.value = gainValue;
+        splitter.connect(gain, input, 0);
+        gain.connect(merger, 0, output);
+      });
+
+      merger.connect(downmixGain);
+      downmixGain.connect(context.destination);
+      originalGain.gain.value = 0;
+      downmixGain.gain.value = 1;
+
+      audioGraph = { context, originalGain, downmixGain };
+      return audioGraph;
+    } catch (error) {
+      // If graph construction fails, restore the ordinary media output so a
+      // browser-specific Web Audio limitation does not make the video mute.
+      try {
+        if (source && context) source.connect(context.destination);
+      } catch (restoreError) {
+        console.warn('Unable to restore native audio output:', restoreError);
+      }
+      audioOutputSelect.disabled = true;
+      audioOutputStatus.textContent = 'Stereo downmix is unavailable; using the browser default.';
+      console.warn('Unable to create audio downmix:', error);
+      return null;
+    }
+  }
+
+  async function setAudioOutput(mode) {
+    const graph = ensureAudioGraph();
+    if (!graph) return;
+
+    try {
+      if (graph.context.state === 'suspended') await graph.context.resume();
+      const downmixEnabled = mode === 'stereo';
+      graph.originalGain.gain.value = downmixEnabled ? 0 : 1;
+      graph.downmixGain.gain.value = downmixEnabled ? 1 : 0;
+      audioOutputStatus.textContent = downmixEnabled
+        ? 'Stereo downmix is active; centre-channel dialogue is sent to both speakers.'
+        : 'Original channel layout is active; the device controls its surround downmix.';
+    } catch (error) {
+      audioOutputStatus.textContent = 'Unable to change the audio output mode.';
+      console.warn('Unable to change audio output:', error);
+    }
+  }
+
+  audioOutputSelect.addEventListener('change', () => {
+    setAudioOutput(audioOutputSelect.value);
+  });
+  media.addEventListener('play', () => {
+    setAudioOutput(audioOutputSelect.value);
+  });
 
   copyButton.addEventListener('click', () => {
     navigator.clipboard.writeText(finalVideoUrl);
