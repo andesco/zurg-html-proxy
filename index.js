@@ -497,13 +497,12 @@ ${BLADES_STYLESHEET}
 <main class="container">
 <article>
 <h1>Zurg HTML Proxy</h1>
-<p>This Worker provides a fast, authenticated library browser and a playback interface designed for Safari and the Tesla browser.</p>
+<p>This Worker provides a fast, authenticated library browser and a playback interface designed for Tesla’s web browser and other Chromium-based browsers.</p>
 <div>
 <a href="/http/" role="button">Browse files</a>
 <a href="/diagnostics" role="button" class="secondary">Playback diagnostics</a>
 <a href="${escapeHtml(theatreUrl)}" role="button" class="secondary">Tesla Theatre</a>
 </div>
-<small>On Tesla, choose “Go to Site” on YouTube to return here in true Theatre mode. This uses Tesla’s YouTube handoff and is intended for use while parked.</small>
 </article>
 </main>
 </body>
