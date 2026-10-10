@@ -6,7 +6,7 @@ compatibility_flags = ["nodejs_compat"]
 #workers_dev = false
 
 [assets]
-directory = "fixtures"
+directory = "."
 binding = "ASSETS"
 
 # [vars]
