@@ -66,6 +66,11 @@ make_multitrack_fixture() {
     "$out_dir/aac-multi-track.m4a"
 }
 
+make_fixture stereo aac 160k aac-track-1.m4a \
+  '0.35*sin(2*PI*440*t)|0.35*sin(2*PI*440*t)'
+make_fixture stereo aac 160k aac-track-2.m4a \
+  '0.35*sin(2*PI*880*t)|0.35*sin(2*PI*880*t)'
+
 # Each channel uses a different tone. The 659 Hz tone is in the centre channel,
 # making it easy to notice when a browser drops the dialogue channel.
 make_fixture mono aac 96k aac-mono.m4a \

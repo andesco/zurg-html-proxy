@@ -165,6 +165,15 @@ var FORWARDED_REQUEST_HEADERS = [
   "Depth",
   "Translate"
 ];
+var FORWARDED_MEDIA_HEADERS = [
+  "Accept-Ranges",
+  "Content-Length",
+  "Content-Range",
+  "Content-Type",
+  "ETag",
+  "Last-Modified",
+  "Vary"
+];
 var BLADES_STYLESHEET = '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@anyblades/blades@3.0.0/css/blades.min.css" integrity="sha384-yv57bBMrm3XUDhJRiD5RTIfUNqVarH0OWpYqMHzQpjp+PBvfvj2ueHT1xgLuz0Z/" crossorigin="anonymous">';
 var DIRECTORY_CSP = "default-src 'none'; style-src https://cdn.jsdelivr.net; base-uri 'none'; frame-ancestors 'none'";
 var PLAYER_CSP = "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; style-src 'self' 'unsafe-inline' https://cdn.plyr.io https://cdn.jsdelivr.net; script-src 'self' 'unsafe-inline' https://cdn.plyr.io; media-src 'self' http: https:; img-src 'self' data: https:; connect-src 'self'";
@@ -407,13 +416,7 @@ async function handleStrmPage(request, env, requestUrl) {
   const downloadName = decodePathSegment(rawFileName).replace(/\.strm$/i, "") || "media";
   const title = downloadName.replace(/\./g, " ").replace(/\s+/g, " ").trim() || "Media";
   const folder = pathParts.length > 2 ? decodePathSegment(pathParts.at(-2)) : "";
-  const directDeliveryError = getDirectDeliveryError(sourceUrl, requestUrl);
-  if (directDeliveryError) {
-    return new Response(directDeliveryError, {
-      status: 502,
-      headers: securityHeaders()
-    });
-  }
+  const sourceNeedsProxy = Boolean(sourceUrl.username || sourceUrl.password) || requestUrl.protocol === "https:" && sourceUrl.protocol !== "https:";
   const playerMode = requestUrl.searchParams.get("player") === "plyr" ? "plyr" : "native";
   const streamToken = await createStreamToken(
     sourceUrl.toString(),
@@ -423,6 +426,12 @@ async function handleStrmPage(request, env, requestUrl) {
   );
   const streamUrl = new URL("/media-redirect", requestUrl.origin);
   streamUrl.searchParams.set("token", streamToken);
+  if (sourceNeedsProxy) {
+    streamUrl.searchParams.set("mode", "proxy");
+  }
+  const fallbackUrl = new URL("/media-redirect", requestUrl.origin);
+  fallbackUrl.searchParams.set("token", streamToken);
+  fallbackUrl.searchParams.set("mode", "proxy");
   const downloadUrl = new URL(streamUrl.href);
   downloadUrl.searchParams.set("download", "1");
   return htmlResponse(
@@ -431,8 +440,10 @@ async function handleStrmPage(request, env, requestUrl) {
       folder,
       playerMode,
       streamUrl: relativeUrl(streamUrl),
+      fallbackUrl: relativeUrl(fallbackUrl),
       downloadUrl: relativeUrl(downloadUrl),
-      resumeKey: `zurg-playback:${requestUrl.pathname}`
+      resumeKey: `zurg-playback:${requestUrl.pathname}`,
+      sourceNeedsProxy
     }),
     200,
     PLAYER_CSP
@@ -460,10 +471,20 @@ function getDirectDeliveryError(sourceUrl, requestUrl) {
 }
 __name(getDirectDeliveryError, "getDirectDeliveryError");
 async function handleMediaRedirect(request, env, requestUrl) {
+  const proxyMode = requestUrl.searchParams.get("mode") === "proxy";
+  if (proxyMode && request.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        ...securityHeaders(),
+        ...videoCorsHeaders(request)
+      }
+    });
+  }
   if (!["GET", "HEAD"].includes(request.method)) {
     return new Response("Method Not Allowed", {
       status: 405,
-      headers: { Allow: "GET, HEAD" }
+      headers: { ...securityHeaders(), Allow: proxyMode ? "GET, HEAD, OPTIONS" : "GET, HEAD" }
     });
   }
   const token = requestUrl.searchParams.get("token");
@@ -497,6 +518,9 @@ async function handleMediaRedirect(request, env, requestUrl) {
       headers: securityHeaders()
     });
   }
+  if (proxyMode) {
+    return proxyMediaResponse(request, sourceUrl, descriptor.downloadName, requestUrl.searchParams.get("download") === "1");
+  }
   const directDeliveryError = getDirectDeliveryError(sourceUrl, requestUrl);
   if (directDeliveryError) {
     return new Response(directDeliveryError, {
@@ -507,6 +531,86 @@ async function handleMediaRedirect(request, env, requestUrl) {
   return redirectResponse(sourceUrl.href);
 }
 __name(handleMediaRedirect, "handleMediaRedirect");
+async function proxyMediaResponse(request, sourceUrl, downloadName, asDownload) {
+  const upstreamUrl = new URL(sourceUrl.href);
+  const headers = new Headers();
+  for (const headerName of FORWARDED_REQUEST_HEADERS) {
+    const value = request.headers.get(headerName);
+    if (value) {
+      headers.set(headerName, value);
+    }
+  }
+  if (sourceUrl.username || sourceUrl.password) {
+    const username = decodePathSegment(sourceUrl.username);
+    const password = decodePathSegment(sourceUrl.password);
+    headers.set("Authorization", `Basic ${base64Encode(`${username}:${password}`)}`);
+    upstreamUrl.username = "";
+    upstreamUrl.password = "";
+  }
+  const upstreamResponse = await fetch(upstreamUrl, {
+    method: request.method,
+    headers,
+    redirect: "follow"
+  });
+  const responseHeaders = new Headers(securityHeaders());
+  for (const headerName of FORWARDED_MEDIA_HEADERS) {
+    const value = upstreamResponse.headers.get(headerName);
+    if (value) {
+      responseHeaders.set(headerName, value);
+    }
+  }
+  if (!responseHeaders.has("Content-Type")) {
+    const inferredType = inferMediaType(upstreamResponse.url || upstreamUrl.href);
+    if (inferredType) {
+      responseHeaders.set("Content-Type", inferredType);
+    }
+  }
+  if (asDownload) {
+    responseHeaders.set("Content-Disposition", makeAttachmentHeader(downloadName));
+  }
+  for (const [name, value] of Object.entries(videoCorsHeaders(request))) {
+    responseHeaders.set(name, value);
+  }
+  return new Response(request.method === "HEAD" ? null : upstreamResponse.body, {
+    status: upstreamResponse.status,
+    statusText: upstreamResponse.statusText,
+    headers: responseHeaders
+  });
+}
+__name(proxyMediaResponse, "proxyMediaResponse");
+function inferMediaType(urlString) {
+  try {
+    const pathname = new URL(urlString).pathname.toLowerCase();
+    if (pathname.endsWith(".mp4")) return "video/mp4";
+    if (pathname.endsWith(".m4v")) return "video/x-m4v";
+    if (pathname.endsWith(".webm")) return "video/webm";
+    if (pathname.endsWith(".mkv")) return "video/x-matroska";
+    return "";
+  } catch {
+    return "";
+  }
+}
+__name(inferMediaType, "inferMediaType");
+function makeAttachmentHeader(fileName) {
+  const cleanName = String(fileName || "media").replace(/[\r\n"\\/]/g, "_").replace(/[^\p{L}\p{N}._ -]/gu, "_").slice(0, 160) || "media";
+  const fallbackName = cleanName.replace(/[^A-Za-z0-9._-]/g, "_") || "media";
+  return `attachment; filename="${fallbackName}"; filename*=UTF-8''${encodeURIComponent(cleanName)}`;
+}
+__name(makeAttachmentHeader, "makeAttachmentHeader");
+function videoCorsHeaders(request) {
+  const headers = {
+    "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+    "Access-Control-Allow-Headers": "Range, If-Range, If-None-Match, If-Modified-Since",
+    "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges, Content-Type, ETag"
+  };
+  const origin = request.headers.get("Origin");
+  if (origin && origin === new URL(request.url).origin) {
+    headers["Access-Control-Allow-Origin"] = origin;
+    headers.Vary = "Origin";
+  }
+  return headers;
+}
+__name(videoCorsHeaders, "videoCorsHeaders");
 function redirectResponse(location) {
   return new Response(null, {
     status: 302,
@@ -799,6 +903,10 @@ function renderDiagnosticsPage() {
       trackSequence: [
         "Track 1 · 440 Hz · English",
         "Track 2 · 880 Hz · commentary"
+      ],
+      fallbackTracks: [
+        { file: "aac-track-1.m4a", label: "Track 1 · 440 Hz · English" },
+        { file: "aac-track-2.m4a", label: "Track 2 · 880 Hz · commentary" }
       ]
     }
   ];
@@ -1076,7 +1184,9 @@ ${BLADES_STYLESHEET}
       mediaCapabilities: 'checking',
       audioTracks: 'checking',
       selectedTrack: 'not selected',
-      playback: 'ready'
+      playback: 'ready',
+      audioOutput: fixture.channels > 2 ? 'stereo downmix requested' : 'browser default',
+      fallbackTrackIndex: 0
     };
     const trackLabel = document.createElement('label');
     trackLabel.htmlFor = 'audio-track-' + fixture.test;
@@ -1087,6 +1197,22 @@ ${BLADES_STYLESHEET}
     trackSelect.innerHTML = '<option value="">Track selection unavailable</option>';
     const trackStatus = document.createElement('small');
     trackStatus.textContent = 'Track information will appear after the file metadata loads.';
+    const outputLabel = document.createElement('label');
+    outputLabel.htmlFor = 'audio-output-' + fixture.test;
+    outputLabel.textContent = 'Audio output';
+    const outputSelect = document.createElement('select');
+    outputSelect.id = 'audio-output-' + fixture.test;
+    outputSelect.append(
+      new Option('Stereo downmix (recommended)', 'stereo'),
+      new Option('Original channel layout', 'original')
+    );
+    const outputStatus = document.createElement('small');
+    outputStatus.textContent = 'The browser default channel routing is active.';
+    if (fixture.channels <= 2) {
+      outputLabel.hidden = true;
+      outputSelect.hidden = true;
+      outputStatus.hidden = true;
+    }
     const getAudioTracks = () => {
       try {
         const tracks = audio.audioTracks;
@@ -1105,12 +1231,29 @@ ${BLADES_STYLESHEET}
     const refreshAudioTrackSelector = () => {
       const tracks = getAudioTracks();
       trackSelect.textContent = '';
+      if ((!tracks || tracks.length < 2) && fixture.fallbackTracks) {
+        state.audioTracks = tracks
+          ? tracks.length + ' embedded track(s) exposed; separate-file fallback available'
+          : 'embedded track API unavailable; separate-file fallback available';
+        fixture.fallbackTracks.forEach((track, index) => {
+          trackSelect.append(new Option(track.label, String(index)));
+        });
+        trackSelect.value = String(state.fallbackTrackIndex);
+        trackSelect.disabled = false;
+        state.selectedTrack = fixture.fallbackTracks[state.fallbackTrackIndex].label;
+        trackStatus.textContent = tracks
+          ? 'The browser exposed fewer than two embedded tracks; this selector uses equivalent separate AAC files.'
+          : 'Embedded track switching is unavailable; this selector uses equivalent separate AAC files so you can compare the tones.';
+        return;
+      }
       if (!tracks) {
-        state.audioTracks = 'not exposed by this browser';
-        state.selectedTrack = 'not available';
+        state.audioTracks = 'single embedded audio track; selection not applicable';
+        state.selectedTrack = 'single audio track';
         trackSelect.disabled = true;
-        trackSelect.append(new Option('Track selection unavailable', ''));
-        trackStatus.textContent = 'This browser does not expose HTMLMediaElement.audioTracks; use its native media menu if available.';
+        trackSelect.append(new Option('Single embedded audio track', ''));
+        trackStatus.textContent = fixture.channels > 2
+          ? 'This fixture has one multichannel track; use the Audio output control to test stereo downmixing.'
+          : 'This fixture has one audio track; embedded track selection is not applicable.';
         return;
       }
       state.audioTracks = tracks.length + ' track(s) exposed';
@@ -1144,6 +1287,7 @@ ${BLADES_STYLESHEET}
         'expected channels: ' + fixture.channels,
         'audio tracks API: ' + state.audioTracks,
         'selected audio track: ' + state.selectedTrack,
+        'audio output: ' + state.audioOutput,
         'decoded audio: ' + decodedAudio,
         'time: ' + formatTime(audio.currentTime) + ' / ' + formatTime(audio.duration),
         'metadata: ' + state.metadata,
@@ -1166,11 +1310,90 @@ ${BLADES_STYLESHEET}
     }
     card.append(testIndex, heading, specification);
     if (sequence.textContent) card.append(sequence);
-    card.append(trackLabel, trackSelect, trackStatus, playbackState, audio, progress, result, fixtureActions);
+    card.append(outputLabel, outputSelect, outputStatus, trackLabel, trackSelect, trackStatus, playbackState, audio, progress, result, fixtureActions);
     container.appendChild(card);
+
+    let audioGraph = null;
+    const ensureAudioGraph = () => {
+      if (fixture.channels <= 2 || audioGraph) return audioGraph;
+      const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextConstructor) {
+        outputSelect.disabled = true;
+        state.audioOutput = 'browser default; Web Audio unavailable';
+        outputStatus.textContent = 'Web Audio is unavailable; using the browser default channel routing.';
+        return null;
+      }
+      let context;
+      let source;
+      try {
+        context = new AudioContextConstructor();
+        source = context.createMediaElementSource(audio);
+        const originalGain = context.createGain();
+        const downmixGain = context.createGain();
+        const splitter = context.createChannelSplitter(Math.max(2, fixture.channels));
+        const merger = context.createChannelMerger(2);
+        source.connect(originalGain);
+        originalGain.connect(context.destination);
+        source.connect(splitter);
+        const routes = [
+          [0, 0, 1],
+          [1, 1, 1],
+          [2, 0, 0.7071],
+          [2, 1, 0.7071],
+          [3, 0, 0.5],
+          [3, 1, 0.5],
+          [4, 0, 0.7071],
+          [5, 1, 0.7071],
+          [6, 0, 0.5],
+          [7, 1, 0.5]
+        ];
+        routes.filter((route) => route[0] < fixture.channels).forEach(([input, output, gainValue]) => {
+          const gain = context.createGain();
+          gain.gain.value = gainValue;
+          splitter.connect(gain, input, 0);
+          gain.connect(merger, 0, output);
+        });
+        merger.connect(downmixGain);
+        downmixGain.connect(context.destination);
+        originalGain.gain.value = 0;
+        downmixGain.gain.value = 1;
+        audioGraph = { context, originalGain, downmixGain };
+        outputSelect.disabled = false;
+        return audioGraph;
+      } catch (_) {
+        try {
+          if (source && context) source.connect(context.destination);
+        } catch (_) {}
+        outputSelect.disabled = true;
+        state.audioOutput = 'browser default; stereo downmix unavailable';
+        outputStatus.textContent = 'Stereo downmix is unavailable; using the browser default channel routing.';
+        return null;
+      }
+    };
+    const setAudioOutput = async (mode) => {
+      const graph = ensureAudioGraph();
+      if (!graph) return;
+      try {
+        if (graph.context.state === 'suspended') await graph.context.resume();
+        const downmixEnabled = mode === 'stereo';
+        graph.originalGain.gain.value = downmixEnabled ? 0 : 1;
+        graph.downmixGain.gain.value = downmixEnabled ? 1 : 0;
+        state.audioOutput = downmixEnabled ? 'stereo downmix active' : 'original channel layout active';
+        outputStatus.textContent = downmixEnabled
+          ? 'Stereo downmix is active; centre, surround, and LFE channels are folded into left and right.'
+          : 'Original channel layout is active; the browser or vehicle controls its surround routing.';
+        renderResult();
+      } catch (_) {
+        state.audioOutput = 'unable to change output mode';
+        outputStatus.textContent = 'Unable to change the audio output mode.';
+        renderResult();
+      }
+    };
+    outputSelect.addEventListener('change', () => setAudioOutput(outputSelect.value));
 
     async function startPlayback() {
       stopOtherAudio(audio);
+      if (fixture.channels > 2) await setAudioOutput(outputSelect.value);
       if (audio.networkState === 0) audio.load();
       try {
         await audio.play();
@@ -1189,6 +1412,20 @@ ${BLADES_STYLESHEET}
     trackSelect.addEventListener('change', () => {
       const tracks = getAudioTracks();
       const selectedIndex = Number(trackSelect.value);
+      if ((!tracks || tracks.length < 2) && fixture.fallbackTracks) {
+        if (!Number.isInteger(selectedIndex) || !fixture.fallbackTracks[selectedIndex]) return;
+        const resumePlayback = !audio.paused && !audio.ended;
+        state.fallbackTrackIndex = selectedIndex;
+        state.selectedTrack = fixture.fallbackTracks[selectedIndex].label;
+        state.metadata = 'loading';
+        audio.src = '/fixtures/' + encodeURIComponent(fixture.fallbackTracks[selectedIndex].file);
+        link.href = audio.src;
+        audio.load();
+        if (resumePlayback) audio.play().catch(() => {});
+        trackStatus.textContent = 'Using the selected separate AAC file because embedded track switching is unavailable.';
+        renderResult();
+        return;
+      }
       if (!tracks || !Number.isInteger(selectedIndex) || !tracks[selectedIndex]) return;
       tracks.forEach((track, index) => {
         try {
@@ -1214,6 +1451,7 @@ ${BLADES_STYLESHEET}
       });
     });
     audio.addEventListener('play', () => {
+      if (fixture.channels > 2 && !audioGraph) setAudioOutput(outputSelect.value);
       state.playback = 'play requested';
       playbackState.className = 'playback-state';
       playbackState.textContent = 'PLAY REQUESTED - waiting for media';
@@ -1305,7 +1543,7 @@ ${listing}
 </html>`;
 }
 __name(renderDirectoryPage, "renderDirectoryPage");
-function renderPlayerPage({ title, folder, playerMode, streamUrl, downloadUrl, resumeKey }) {
+function renderPlayerPage({ title, folder, playerMode, streamUrl, fallbackUrl, downloadUrl, resumeKey, sourceNeedsProxy }) {
   const playerAssets = playerMode === "plyr" ? `<link rel="stylesheet" href="${PLYR_CSS_URL}" integrity="${PLYR_CSS_INTEGRITY}" crossorigin="anonymous">` : "";
   const plyrScript = playerMode === "plyr" ? `<script src="${PLYR_JS_URL}" integrity="${PLYR_JS_INTEGRITY}" crossorigin="anonymous"><\/script>` : "";
   const config = {
@@ -1313,8 +1551,10 @@ function renderPlayerPage({ title, folder, playerMode, streamUrl, downloadUrl, r
     folder,
     playerMode,
     streamUrl,
+    fallbackUrl,
     downloadUrl,
-    resumeKey
+    resumeKey,
+    sourceNeedsProxy
   };
   return `<!doctype html>
 <html lang="en">
@@ -1338,15 +1578,22 @@ ${folder ? `<h2>${escapeHtml(folder)}</h2>` : ""}
 <div class="overflow-auto">
 <video id="player" width="640" controls playsinline preload="metadata" src="${escapeHtml(streamUrl)}"></video>
 </div>
-<p id="status" role="status">Direct media delivery enabled. Cloudflare authorizes the source URL, then the browser fetches media directly from the upstream.</p>
-<p id="error" role="alert" hidden>Direct playback could not start. The upstream must provide an HTTPS, browser-compatible media URL. No compatibility relay is available.</p>
+<p id="status" role="status">${sourceNeedsProxy ? "This source requires the opt-in compatibility relay. Media bytes will pass through Cloudflare while playing." : "Direct media delivery enabled. Cloudflare authorizes the source URL, then the browser fetches media directly from the upstream."}</p>
+<p id="error" role="alert" hidden>Direct playback could not start. Try the opt-in compatibility relay.</p>
 <label for="player-audio-track">Embedded audio track</label>
 <select id="player-audio-track" disabled><option value="">Track selection unavailable</option></select>
 <small id="player-audio-track-status">Track information will appear after the media metadata loads.</small>
+<label for="player-audio-output">Audio output</label>
+<select id="player-audio-output"${sourceNeedsProxy ? "" : " disabled"}>
+<option value="stereo" selected>Stereo downmix (recommended)</option>
+<option value="original">Original channel layout</option>
+</select>
+<small id="player-audio-output-status">${sourceNeedsProxy ? "Stereo downmix will be enabled when playback starts." : "Audio output controls activate after using the compatibility relay."}</small>
 <div>
 <a href="/http/" role="button" class="secondary">Browse files</a>
 <a href="/diagnostics" role="button" class="secondary">Diagnostics</a>
 <button type="button" id="fullscreen-button" class="secondary">Fullscreen</button>
+<button type="button" id="fallback-button" class="secondary"${sourceNeedsProxy ? " hidden" : ""}>Try compatibility relay</button>
 <button type="button" id="copy-button" class="secondary">Copy page URL</button>
 <button type="button" id="download-button" class="secondary">Download media</button>
 <button type="button" id="switch-player" class="secondary">Switch to ${playerMode === "plyr" ? "native" : "Plyr"}</button>
@@ -1362,16 +1609,92 @@ ${plyrScript}
   const video = document.getElementById('player');
   const status = document.getElementById('status');
   const error = document.getElementById('error');
+  const fallbackButton = document.getElementById('fallback-button');
   const copyButton = document.getElementById('copy-button');
   const downloadButton = document.getElementById('download-button');
   const fullscreenButton = document.getElementById('fullscreen-button');
   const switchButton = document.getElementById('switch-player');
   const audioTrackSelect = document.getElementById('player-audio-track');
   const audioTrackStatus = document.getElementById('player-audio-track-status');
+  const audioOutputSelect = document.getElementById('player-audio-output');
+  const audioOutputStatus = document.getElementById('player-audio-output-status');
+  let audioGraph = null;
+  let compatibilityActive = Boolean(config.sourceNeedsProxy);
 
   function setStatus(message, isError = false) {
     status.textContent = message;
     status.classList.toggle('error', isError);
+  }
+
+  function ensureAudioGraph() {
+    if (!compatibilityActive || audioGraph) return audioGraph;
+    const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextConstructor) {
+      audioOutputSelect.disabled = true;
+      audioOutputStatus.textContent = 'Web Audio is unavailable; using the browser default channel routing.';
+      return null;
+    }
+    let context;
+    let source;
+    try {
+      context = new AudioContextConstructor();
+      source = context.createMediaElementSource(video);
+      const originalGain = context.createGain();
+      const downmixGain = context.createGain();
+      const splitter = context.createChannelSplitter(8);
+      const merger = context.createChannelMerger(2);
+      source.connect(originalGain);
+      originalGain.connect(context.destination);
+      source.connect(splitter);
+      const routes = [
+        [0, 0, 1],
+        [1, 1, 1],
+        [2, 0, 0.7071],
+        [2, 1, 0.7071],
+        [3, 0, 0.5],
+        [3, 1, 0.5],
+        [4, 0, 0.7071],
+        [5, 1, 0.7071],
+        [6, 0, 0.5],
+        [7, 1, 0.5]
+      ];
+      routes.forEach(([input, output, gainValue]) => {
+        const gain = context.createGain();
+        gain.gain.value = gainValue;
+        splitter.connect(gain, input, 0);
+        gain.connect(merger, 0, output);
+      });
+      merger.connect(downmixGain);
+      downmixGain.connect(context.destination);
+      originalGain.gain.value = 0;
+      downmixGain.gain.value = 1;
+      audioGraph = { context, originalGain, downmixGain };
+      audioOutputSelect.disabled = false;
+      return audioGraph;
+    } catch (_) {
+      try {
+        if (source && context) source.connect(context.destination);
+      } catch (_) {}
+      audioOutputSelect.disabled = true;
+      audioOutputStatus.textContent = 'Stereo downmix is unavailable; using the browser default channel routing.';
+      return null;
+    }
+  }
+
+  async function setAudioOutput(mode) {
+    const graph = ensureAudioGraph();
+    if (!graph) return;
+    try {
+      if (graph.context.state === 'suspended') await graph.context.resume();
+      const downmixEnabled = mode === 'stereo';
+      graph.originalGain.gain.value = downmixEnabled ? 0 : 1;
+      graph.downmixGain.gain.value = downmixEnabled ? 1 : 0;
+      audioOutputStatus.textContent = downmixEnabled
+        ? 'Stereo downmix is active; centre, surround, and LFE channels are folded into left and right.'
+        : 'Original channel layout is active; the browser or vehicle controls its surround routing.';
+    } catch (_) {
+      audioOutputStatus.textContent = 'Unable to change the audio output mode.';
+    }
   }
 
   function getAudioTracks() {
@@ -1464,7 +1787,26 @@ ${plyrScript}
 
   video.addEventListener('error', () => {
     error.hidden = false;
+    if (!config.sourceNeedsProxy) fallbackButton.hidden = false;
     setStatus('The source could not be played in this browser.', true);
+  });
+
+  audioOutputSelect.addEventListener('change', () => setAudioOutput(audioOutputSelect.value));
+  video.addEventListener('play', () => {
+    if (compatibilityActive && !audioGraph) setAudioOutput(audioOutputSelect.value);
+  });
+
+  fallbackButton.addEventListener('click', async () => {
+    if (!confirm('The compatibility relay sends the media bytes through Cloudflare and may consume Worker bandwidth. Continue?')) return;
+    savePosition();
+    fallbackButton.disabled = true;
+    error.hidden = true;
+    compatibilityActive = true;
+    setStatus('Retrying through the compatibility relay. Cloudflare will carry the media bytes while this plays.');
+    video.src = config.fallbackUrl;
+    video.load();
+    await setAudioOutput(audioOutputSelect.value);
+    video.play().catch(() => {});
   });
 
   async function copyText(value) {
@@ -1488,7 +1830,10 @@ ${plyrScript}
 
   copyButton.addEventListener('click', () => copyText(window.location.href));
   downloadButton.addEventListener('click', () => {
-    if (confirm('Open the direct media URL? The upstream controls whether it plays inline or downloads.')) {
+    const message = config.sourceNeedsProxy
+      ? 'Download this media through the compatibility relay? Cloudflare will carry the media bytes.'
+      : 'Open the direct media URL? The upstream controls whether it plays inline or downloads.';
+    if (confirm(message)) {
       window.location.href = config.downloadUrl;
     }
   });

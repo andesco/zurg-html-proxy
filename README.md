@@ -21,10 +21,11 @@ Zurg provides a basic HTML file browser at `/http`. The Cloudflare Worker:
 5. creates a short-lived encrypted stream token; and
 6. redirects the browser to the signed upstream media URL.
 
-The Worker does not proxy media bytes. The upstream must provide an HTTPS URL
-that the browser can play directly, typically a URL containing its own
-short-lived access token. Sources with embedded credentials or an HTTP URL on
-an HTTPS Worker page are rejected instead of being relayed through Cloudflare.
+The Worker does not proxy media bytes by default. The upstream must provide an
+HTTPS URL that the browser can play directly, typically a URL containing its own
+short-lived access token. If direct playback fails, the player offers an
+explicit, confirmation-gated compatibility relay; that opt-in path does carry
+the media bytes through Cloudflare and can consume Worker bandwidth.
 
 ## Deploy to Cloudflare
    
@@ -118,15 +119,18 @@ and only works while the vehicle is parked. Similar implementations describe the
 
 ### Direct Media Redirect Endpoint
 
-The `/media-redirect` endpoint is an authenticated token broker:
+The `/media-redirect` endpoint is an authenticated token broker by default:
 
 - validates the encrypted, expiring stream token;
 - verifies the source origin against the allowlist;
 - rejects credentials embedded in the upstream URL; and
 - returns an HTTP redirect to the upstream URL.
 
-The legacy `/video-proxy` path is retained only as a redirect-only alias for
-already-open player pages. It cannot proxy or rewrite a media response.
+The legacy `/video-proxy` path is retained as an alias. Adding
+`mode=proxy` opts into the compatibility relay, which forwards range requests
+and streams the upstream response through the Worker with browser media and
+CORS headers. The normal player never selects this mode automatically unless
+the upstream URL is HTTP or contains embedded Basic Auth credentials.
 
 ### Architecture
 
@@ -136,19 +140,25 @@ Browser → Cloudflare Worker
 
 Browser → signed Zurg/Real-Debrid media URL
           (media bytes bypass this Worker)
+
+Optional recovery:
+Browser → Cloudflare Worker → signed media URL
+          (only after the user confirms compatibility relay)
 ```
 
 ## Audio Tracks and Container Compatibility
 
-The Worker does not rewrite, select, downmix, remux, or transcode audio. Plyr
-and the native player operate on the same browser media element, using the
-headers and track layout provided by the direct upstream response.
+The Worker does not rewrite, select, remux, or transcode audio. Plyr and the
+native player operate on the same browser media element, using the headers and
+track layout provided by the direct upstream response. Diagnostics can use Web
+Audio for an in-browser stereo downmix of multichannel test fixtures; this does
+not change the media file or send it through the Worker.
 
 The player and diagnostics page expose an audio-track selector when the browser
 provides the standard `HTMLMediaElement.audioTracks` API. The selector changes
 `AudioTrack.enabled` on the same media element; it does not copy media through
 the Worker. If the API is not exposed, the page reports that limitation and the
-browser’s native media menu is the only remaining option.
+browser’s native media menu is the only remaining option for that media URL.
 
 Some Chromium-based browsers do not expose embedded-track switching to page
 JavaScript. In that case the selector reports that limitation; the browser
@@ -167,6 +177,11 @@ through 18 cover:
 - AC-3 and E-AC-3 5.1 in MP4;
 - sequential, isolated AAC 5.1 and 7.1 channel parades; and
 - a two-track AAC stereo M4A with distinct track labels and tones.
+
+When Tesla does not expose embedded audio-track switching, Test 18 also offers
+two equivalent single-track AAC files so the two tones can still be selected
+and compared without pretending that the browser switched the original M4A’s
+embedded tracks.
 
 Each fixture reports `canPlayType`, MediaCapabilities support, actual playback
 state, and whether the browser exposes an audio-track list. The multichannel
