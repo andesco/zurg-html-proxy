@@ -171,7 +171,7 @@ var index_default = {
         return await handleMediaRedirect(request, env, requestUrl);
       }
       if (requestUrl.pathname === "/") {
-        return htmlResponse(renderLandingPage(), 200, DIRECTORY_CSP);
+        return htmlResponse(renderLandingPage(requestUrl.origin), 200, DIRECTORY_CSP);
       }
       if (requestUrl.pathname.toLowerCase().endsWith(".strm")) {
         return await handleStrmPage(request, env, requestUrl);
@@ -477,7 +477,14 @@ function decodeHtmlEntities(value) {
   return String(value).replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/&quot;/gi, '"').replace(/&#39;/gi, "'");
 }
 __name(decodeHtmlEntities, "decodeHtmlEntities");
-function renderLandingPage() {
+function buildTeslaTheatreUrl(targetUrl) {
+  const redirectUrl = new URL("https://www.youtube.com/redirect");
+  redirectUrl.searchParams.set("q", targetUrl);
+  return redirectUrl.href;
+}
+__name(buildTeslaTheatreUrl, "buildTeslaTheatreUrl");
+function renderLandingPage(workerOrigin) {
+  const theatreUrl = buildTeslaTheatreUrl(`${workerOrigin}/`);
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -494,7 +501,9 @@ ${PICO_STYLESHEET}
 <div>
 <a href="/http/" role="button">Browse files</a>
 <a href="/diagnostics" role="button" class="secondary">Playback diagnostics</a>
+<a href="${escapeHtml(theatreUrl)}" role="button" class="secondary">Tesla Theatre</a>
 </div>
+<small>On Tesla, choose “Go to Site” on YouTube to return here in true Theatre mode. This uses Tesla’s YouTube handoff and is intended for use while parked.</small>
 </article>
 </main>
 </body>
@@ -1103,7 +1112,7 @@ ${folder ? `<h2>${escapeHtml(folder)}</h2>` : ""}
 <div>
 <a href="/http/" role="button" class="secondary">Browse files</a>
 <a href="/diagnostics" role="button" class="secondary">Diagnostics</a>
-<button type="button" id="theatre-button" class="secondary">Theatre mode</button>
+<button type="button" id="fullscreen-button" class="secondary">Fullscreen</button>
 <button type="button" id="copy-button" class="secondary">Copy page URL</button>
 <button type="button" id="download-button" class="secondary">Download media</button>
 <button type="button" id="switch-player" class="secondary">Switch to ${playerMode === "plyr" ? "native" : "Plyr"}</button>
@@ -1121,7 +1130,7 @@ ${plyrScript}
   const error = document.getElementById('error');
   const copyButton = document.getElementById('copy-button');
   const downloadButton = document.getElementById('download-button');
-  const theatreButton = document.getElementById('theatre-button');
+  const fullscreenButton = document.getElementById('fullscreen-button');
   const switchButton = document.getElementById('switch-player');
 
   function setStatus(message, isError = false) {
@@ -1179,7 +1188,7 @@ ${plyrScript}
     }
   });
 
-  theatreButton.addEventListener('click', async () => {
+  fullscreenButton.addEventListener('click', async () => {
     try {
       if (typeof video.webkitEnterFullscreen === 'function') {
         video.webkitEnterFullscreen();

@@ -90,17 +90,25 @@ directories:
 
 The Media Session API is supported in all modern browsers including Tesla's Chromium-based browser.
 
-### Theatre Mode
+### Tesla Theatre Mode
 
-The **Tesla Theatre** button uses the [YouTube redirect](https://youtube.com/redirect?q=ttps://github.com/andesco/zurg-html-proxy) technique to initiate theatre mode from the Tesla web browser:
+The root page’s **Tesla Theatre** link uses the same YouTube handoff used by
+Tesla fullscreen launchers. It sends the browser to:
 
-- hides browser controls
-- enables full screen videos
-- uses [Media Session API](https://developer.mozilla.org/en-US/docs/Web/API/Media_Session_API) to enable steering-wheel controls and on-screen metadata
-
-```javascript
-fullscreenLink.href = 'https://youtube.com/redirect?q=' + encodeURIComponent(videoUrl);
+```text
+https://www.youtube.com/redirect?q=<URL-encoded-target>
 ```
+
+Tesla treats YouTube as a Theatre-mode destination. Select **Go to Site** (or
+the equivalent localized button) on YouTube and Tesla returns to this Worker
+in true Theatre mode. This is different from the media page’s **Fullscreen**
+button, which only uses the browser Fullscreen API inside the current browser
+window.
+
+The handoff depends on Tesla’s current browser behavior and only works while
+the vehicle is parked. Similar implementations describe the mechanism in
+[BigScrn’s explanation](https://bigscrn.com/how-it-works/) and
+[Fullscreen Hub’s guide](https://fullscreenhub.com/).
 
 ## Technical Details
 
