@@ -159,145 +159,9 @@ var FORWARDED_MEDIA_HEADERS = [
   "Last-Modified",
   "Vary"
 ];
-var COMMON_STYLES = `
-:root {
-	color-scheme: dark;
-	--page: #08111f;
-	--page-glow: #122c4a;
-	--surface: rgba(16, 29, 48, 0.86);
-	--surface-strong: #142943;
-	--surface-soft: rgba(24, 45, 72, 0.62);
-	--text: #f4f7fb;
-	--muted: #9fb0c5;
-	--accent: #62d7ff;
-	--accent-strong: #1aa6df;
-	--border: rgba(170, 207, 238, 0.2);
-	--shadow: 0 1.5rem 4rem rgba(0, 0, 0, 0.3);
-	--code: rgba(3, 10, 20, 0.72);
-}
-@media (prefers-color-scheme: light) {
-	:root {
-		color-scheme: light;
-		--page: #edf4fa;
-		--page-glow: #d4effb;
-		--surface: rgba(255, 255, 255, 0.88);
-		--surface-strong: #ffffff;
-		--surface-soft: rgba(234, 243, 251, 0.88);
-		--text: #132236;
-		--muted: #5d7188;
-		--accent: #087da9;
-		--accent-strong: #07698e;
-		--border: rgba(25, 72, 107, 0.16);
-		--shadow: 0 1.5rem 4rem rgba(35, 69, 98, 0.14);
-		--code: rgba(225, 237, 247, 0.8);
-	}
-}
-* { box-sizing: border-box; }
-html { min-width: 320px; background: var(--page); }
-body {
-	min-height: 100vh;
-	margin: 0;
-	color: var(--text);
-	font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-	line-height: 1.55;
-	background:
-		radial-gradient(circle at 8% -10%, var(--page-glow), transparent 38rem),
-		radial-gradient(circle at 100% 0%, rgba(67, 121, 182, 0.18), transparent 32rem),
-		var(--page);
-}
-main { width: min(1100px, 100%); margin: 0 auto; padding: clamp(1rem, 4vw, 3rem) 1rem 4rem; }
-article {
-	padding: clamp(1.25rem, 4vw, 2.75rem);
-	background: linear-gradient(145deg, var(--surface), rgba(10, 21, 36, 0.72));
-	border: 1px solid var(--border);
-	border-radius: 1.5rem;
-	box-shadow: var(--shadow);
-	backdrop-filter: blur(18px);
-}
-@media (prefers-color-scheme: light) {
-	article { background: linear-gradient(145deg, var(--surface), rgba(255, 255, 255, 0.72)); }
-}
-.hero { min-height: min(40rem, 78vh); display: flex; flex-direction: column; justify-content: center; }
-.eyebrow { margin: 0 0 0.75rem; color: var(--accent); font-size: 0.75rem; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; }
-.page-header { margin-bottom: 1.75rem; }
-h1, h2, h3 { line-height: 1.12; letter-spacing: -0.025em; overflow-wrap: anywhere; }
-h1 { margin: 0 0 0.8rem; font-size: clamp(2rem, 5vw, 3.5rem); }
-h2 { margin: 0 0 0.7rem; font-size: clamp(1.2rem, 2.8vw, 1.65rem); }
-hgroup { margin: 0; }
-hgroup h2 { color: var(--muted); font-size: 1rem; font-weight: 600; letter-spacing: 0; }
-p { color: var(--muted); }
-.hero p { max-width: 42rem; font-size: clamp(1rem, 2vw, 1.2rem); }
-a { color: var(--accent); }
-a:hover { color: var(--text); }
-.actions { display: flex; flex-wrap: wrap; gap: 0.7rem; align-items: center; margin-top: 1.5rem; }
-button, a[role="button"] {
-	appearance: none;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	gap: 0.45rem;
-	min-height: 2.85rem;
-	padding: 0.72rem 1rem;
-	border: 1px solid transparent;
-	border-radius: 0.75rem;
-	color: #03131e;
-	font: inherit;
-	font-size: 0.94rem;
-	font-weight: 750;
-	text-decoration: none;
-	background: linear-gradient(135deg, var(--accent), #a1ecff);
-	box-shadow: 0 0.55rem 1.5rem rgba(31, 167, 221, 0.2);
-	cursor: pointer;
-	transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
-}
-button:hover, a[role="button"]:hover { color: #03131e; transform: translateY(-1px); box-shadow: 0 0.8rem 1.8rem rgba(31, 167, 221, 0.32); }
-button:active, a[role="button"]:active { transform: translateY(0); }
-button:disabled { cursor: wait; opacity: 0.55; }
-button.secondary, a[role="button"].secondary {
-	color: var(--text);
-	background: var(--surface-soft);
-	border-color: var(--border);
-	box-shadow: none;
-}
-button.secondary:hover, a[role="button"].secondary:hover { color: var(--text); background: var(--surface-strong); box-shadow: none; }
-.player-shell { display: grid; gap: 1rem; }
-video, .plyr { width: 100%; max-width: 960px; background: #000; border-radius: 1rem; box-shadow: 0 1rem 3rem rgba(0, 0, 0, 0.35); }
-video { display: block; aspect-ratio: 16 / 9; object-fit: contain; }
-.plyr { overflow: hidden; }
-.plyr, video { --plyr-control-icon-size: 36px; --plyr-color-main: var(--accent); }
-.status { min-height: 1.5rem; margin: 0; padding: 0.75rem 0.9rem; border: 1px solid var(--border); border-radius: 0.7rem; background: var(--surface-soft); }
-.status.error, .error { color: #ff9eab; border-color: rgba(255, 108, 128, 0.4); background: rgba(126, 28, 48, 0.22); }
-.muted { color: var(--muted); }
-.fixture {
-	margin: 1rem 0;
-	padding: 1.1rem;
-	background: var(--surface-soft);
-	border: 1px solid var(--border);
-	border-radius: 1rem;
-}
-.fixture-index { margin: 0 0 0.45rem; color: var(--accent); font-size: 0.72rem; font-weight: 900; letter-spacing: 0.16em; text-transform: uppercase; }
-.fixture video { max-width: 560px; }
-.fixture-spec { margin: -0.25rem 0 0.8rem; color: var(--text); font-size: 0.86rem; font-weight: 650; }
-.fixture a { display: inline-block; margin-top: 0.4rem; font-weight: 650; }
-.playback-state { display: inline-flex; align-items: center; gap: 0.5rem; min-height: 1.5rem; margin: 0 0 0.75rem; font-weight: 750; }
-.playback-state::before { content: ''; width: 0.75rem; height: 0.75rem; flex: 0 0 auto; border-radius: 50%; background: var(--muted); }
-.playback-state.playing::before { background: #36db83; animation: playback-pulse 1s ease-in-out infinite; }
-.playback-state.error::before { background: #ff6d80; }
-@keyframes playback-pulse { 50% { opacity: 0.35; transform: scale(0.7); } }
-.fixture progress { display: block; width: min(560px, 100%); height: 0.45rem; margin: 0.75rem 0; accent-color: var(--accent); }
-.result { overflow: auto; margin-bottom: 0.5rem; padding: 0.85rem; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; white-space: pre-wrap; background: var(--code); border: 1px solid var(--border); border-radius: 0.75rem; }
-ol { margin: 0; padding: 0.25rem 0 0.25rem 1.5rem; }
-li { margin: 0.6rem 0; padding-left: 0.25rem; overflow-wrap: anywhere; }
-li a { font-weight: 650; text-decoration: none; }
-code { padding: 0.15rem 0.35rem; color: var(--text); background: var(--code); border-radius: 0.35rem; }
-@media (max-width: 620px) {
-	main { padding-top: 0.75rem; }
-	article { border-radius: 1rem; }
-	.actions > button, .actions > a[role="button"] { flex: 1 1 12rem; }
-}
-`;
-var DIRECTORY_CSP = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'";
-var PLAYER_CSP = "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; style-src 'self' 'unsafe-inline' https://cdn.plyr.io; script-src 'self' 'unsafe-inline' https://cdn.plyr.io; media-src 'self' http: https:; img-src 'self' data: https:; connect-src 'self'";
+var PICO_STYLESHEET = '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.min.css" integrity="sha384-L1dWfspMTHU/ApYnFiMz2QID/PlP1xCW9visvBdbEkOLkSSWsP6ZJWhPw6apiXxU" crossorigin="anonymous">';
+var DIRECTORY_CSP = "default-src 'none'; style-src https://cdn.jsdelivr.net; base-uri 'none'; frame-ancestors 'none'";
+var PLAYER_CSP = "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; style-src 'self' 'unsafe-inline' https://cdn.plyr.io https://cdn.jsdelivr.net; script-src 'self' 'unsafe-inline' https://cdn.plyr.io; media-src 'self' http: https:; img-src 'self' data: https:; connect-src 'self'";
 var index_default = {
   async fetch(request, env) {
     const requestUrl = new URL(request.url);
@@ -700,7 +564,7 @@ function sanitizeDirectoryListing(content, targetUrl, workerOrigin) {
     links.push(`<li><a href="${escapeHtml(relativeUrl(proxyUrl))}">${escapeHtml(label)}</a></li>`);
   }
   if (links.length === 0) {
-    return '<p class="muted">No files or directories were found.</p>';
+    return '<p>No files or directories were found.</p>';
   }
   return `<ol>${links.join("")}</ol>`;
 }
@@ -720,15 +584,14 @@ function renderLandingPage() {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Zurg HTML Proxy</title>
-<style>${COMMON_STYLES}</style>
+${PICO_STYLESHEET}
 </head>
 <body>
-<main>
-<article class="hero">
-<p class="eyebrow">Zurg \xB7 Playback</p>
-<h1>Your media, in the browser.</h1>
+<main class="container">
+<article>
+<h1>Zurg HTML Proxy</h1>
 <p>This Worker provides a fast, authenticated library browser and a playback interface designed for Safari and the Tesla browser.</p>
-<div class="actions">
+<div>
 <a href="/http/" role="button">Browse files</a>
 <a href="/diagnostics" role="button" class="secondary">Playback diagnostics</a>
 </div>
@@ -893,15 +756,12 @@ function renderDiagnosticsPage() {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Playback diagnostics</title>
-<style>${COMMON_STYLES}
-.fixture video { max-width: 560px; }
-</style>
+${PICO_STYLESHEET}
 </head>
 <body>
-<main>
+<main class="container">
 <article>
-<header class="page-header">
-<p class="eyebrow">Playback lab</p>
+<header>
 <h1>Playback diagnostics</h1>
 <p>Run this page on macOS Safari, iOS Safari, and the Tesla browser while parked. Video tests are numbered <strong>Test 1</strong> through <strong>Test 6</strong>; audio tests are <strong>Test 7</strong> through <strong>Test 15</strong>. Use one test button at a time, confirm that the card changes to PLAYING, watch or listen to the fixture, and record both capability and real playback results. Capability APIs are hints; actual playback is the meaningful test.</p>
 </header>
@@ -934,20 +794,18 @@ function renderDiagnosticsPage() {
   };
 
   fixtures.forEach((fixture) => {
-    const card = document.createElement('section');
-    card.className = 'fixture';
+    const card = document.createElement('article');
     const testName = 'Test ' + fixture.test;
     card.dataset.testNumber = String(fixture.test);
     card.setAttribute('aria-label', testName + ': ' + fixture.label);
     const testIndex = document.createElement('p');
-    testIndex.className = 'fixture-index';
     testIndex.textContent = testName;
     const heading = document.createElement('h2');
     heading.textContent = fixture.label;
     const specification = document.createElement('p');
-    specification.className = 'fixture-spec';
     specification.textContent = 'Fixture contract: ' + fixture.expected;
     const video = document.createElement('video');
+    video.width = 320;
     video.controls = true;
     video.playsInline = true;
     video.preload = 'none';
@@ -965,8 +823,7 @@ function renderDiagnosticsPage() {
     progress.max = 1;
     progress.value = 0;
     progress.setAttribute('aria-label', 'Playback progress');
-    const result = document.createElement('p');
-    result.className = 'result';
+    const result = document.createElement('pre');
     const state = {
       metadata: 'loading',
       mediaCapabilities: 'checking',
@@ -996,7 +853,6 @@ function renderDiagnosticsPage() {
     link.target = '_blank';
     link.rel = 'noreferrer';
     const fixtureActions = document.createElement('div');
-    fixtureActions.className = 'actions';
     fixtureActions.append(playButton, link);
     card.append(testIndex, heading, specification, playbackState, video, progress, result, fixtureActions);
     container.appendChild(card);
@@ -1135,18 +991,15 @@ function renderDiagnosticsPage() {
   };
 
   fixtures.forEach((fixture) => {
-    const card = document.createElement('section');
-    card.className = 'fixture';
+    const card = document.createElement('article');
     const testName = 'Test ' + fixture.test;
     card.dataset.testNumber = String(fixture.test);
     card.setAttribute('aria-label', testName + ': ' + fixture.label);
     const testIndex = document.createElement('p');
-    testIndex.className = 'fixture-index';
     testIndex.textContent = testName;
     const heading = document.createElement('h2');
     heading.textContent = fixture.label;
     const specification = document.createElement('p');
-    specification.className = 'fixture-spec';
     specification.textContent = 'Fixture contract: ' + fixture.expected;
     const audio = document.createElement('audio');
     audio.controls = true;
@@ -1165,8 +1018,7 @@ function renderDiagnosticsPage() {
     progress.max = 1;
     progress.value = 0;
     progress.setAttribute('aria-label', 'Audio playback progress');
-    const result = document.createElement('p');
-    result.className = 'result';
+    const result = document.createElement('pre');
     const state = {
       metadata: 'loading',
       mediaCapabilities: 'checking',
@@ -1205,7 +1057,6 @@ function renderDiagnosticsPage() {
     link.target = '_blank';
     link.rel = 'noreferrer';
     const fixtureActions = document.createElement('div');
-    fixtureActions.className = 'actions';
     fixtureActions.append(playButton, link);
     card.append(testIndex, heading, specification, playbackState, audio, progress, result, fixtureActions);
     container.appendChild(card);
@@ -1298,13 +1149,12 @@ function renderDirectoryPage(listing) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Browse files</title>
-<style>${COMMON_STYLES}</style>
+${PICO_STYLESHEET}
 </head>
 <body>
-<main>
+<main class="container">
 <article>
-<header class="page-header">
-<p class="eyebrow">Media library</p>
+<header>
 <h1>Browse files</h1>
 <p>Choose a media file to open its playback page.</p>
 </header>
@@ -1334,26 +1184,25 @@ function renderPlayerPage({ title, folder, playerMode, streamUrl, fallbackUrl, d
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)}</title>
+${PICO_STYLESHEET}
 ${playerAssets}
-<style>${COMMON_STYLES}
-.plyr, video { --plyr-control-icon-size: 36px; }
-</style>
 </head>
 <body>
-<main>
+<main class="container">
 <article>
-<header class="page-header">
-<p class="eyebrow">Now playing</p>
+<header>
 <hgroup>
 <h1>${escapeHtml(title)}</h1>
 ${folder ? `<h2>${escapeHtml(folder)}</h2>` : ""}
 </hgroup>
 </header>
-<section class="player-shell" aria-label="Media player">
-<video id="player" controls playsinline preload="metadata" src="${escapeHtml(streamUrl)}"></video>
-<p id="status" class="status muted" role="status">${sourceNeedsProxy ? "Using the compatibility proxy for this authenticated source." : "Direct media redirect enabled."}</p>
-<p id="error" class="status error" role="alert" hidden>Playback could not start. Try the compatibility proxy.</p>
-<div class="actions">
+<section aria-label="Media player">
+<div class="overflow-auto">
+<video id="player" width="640" controls playsinline preload="metadata" src="${escapeHtml(streamUrl)}"></video>
+</div>
+<p id="status" role="status">${sourceNeedsProxy ? "Using the compatibility proxy for this authenticated source." : "Direct media redirect enabled."}</p>
+<p id="error" role="alert" hidden>Playback could not start. Try the compatibility proxy.</p>
+<div>
 <a href="/http/" role="button" class="secondary">Browse files</a>
 <a href="/diagnostics" role="button" class="secondary">Diagnostics</a>
 <button type="button" id="theatre-button" class="secondary">Theatre mode</button>
