@@ -150,7 +150,7 @@ var FORWARDED_REQUEST_HEADERS = [
   "Depth",
   "Translate"
 ];
-var PICO_STYLESHEET = '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.min.css" integrity="sha384-L1dWfspMTHU/ApYnFiMz2QID/PlP1xCW9visvBdbEkOLkSSWsP6ZJWhPw6apiXxU" crossorigin="anonymous">';
+var BLADES_STYLESHEET = '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@anyblades/blades@3.0.0/css/blades.min.css" integrity="sha384-yv57bBMrm3XUDhJRiD5RTIfUNqVarH0OWpYqMHzQpjp+PBvfvj2ueHT1xgLuz0Z/" crossorigin="anonymous">';
 var DIRECTORY_CSP = "default-src 'none'; style-src https://cdn.jsdelivr.net; base-uri 'none'; frame-ancestors 'none'";
 var PLAYER_CSP = "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; style-src 'self' 'unsafe-inline' https://cdn.plyr.io https://cdn.jsdelivr.net; script-src 'self' 'unsafe-inline' https://cdn.plyr.io; media-src 'self' http: https:; img-src 'self' data: https:; connect-src 'self'";
 var index_default = {
@@ -491,7 +491,7 @@ function renderLandingPage(workerOrigin) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Zurg HTML Proxy</title>
-${PICO_STYLESHEET}
+${BLADES_STYLESHEET}
 </head>
 <body>
 <main class="container">
@@ -665,7 +665,7 @@ function renderDiagnosticsPage() {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Playback diagnostics</title>
-${PICO_STYLESHEET}
+${BLADES_STYLESHEET}
 </head>
 <body>
 <main class="container">
@@ -1058,7 +1058,7 @@ function renderDirectoryPage(listing) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Browse files</title>
-${PICO_STYLESHEET}
+${BLADES_STYLESHEET}
 </head>
 <body>
 <main class="container">
@@ -1091,7 +1091,7 @@ function renderPlayerPage({ title, folder, playerMode, streamUrl, downloadUrl, r
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)}</title>
-${PICO_STYLESHEET}
+${BLADES_STYLESHEET}
 ${playerAssets}
 </head>
 <body>
