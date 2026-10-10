@@ -1609,12 +1609,11 @@ ${folder ? `<h2>${escapeHtml(folder)}</h2>` : ""}
 <small id="player-audio-output-status">${sourceNeedsProxy ? "Stereo downmix will be enabled when playback starts." : "Audio output controls activate after using the compatibility relay."}</small>
 <div>
 <a href="/http/" role="button" class="secondary">Browse files</a>
-<a href="/diagnostics" role="button" class="secondary">Diagnostics</a>
 <button type="button" id="fullscreen-button" class="secondary">Fullscreen</button>
 <button type="button" id="fallback-button" class="secondary"${sourceNeedsProxy ? " hidden" : ""}>Try compatibility relay</button>
 <button type="button" id="copy-button" class="secondary">Copy page URL</button>
 <button type="button" id="download-button" class="secondary">Download media</button>
-<button type="button" id="switch-player" class="secondary">Switch to ${playerMode === "plyr" ? "native" : "Plyr"}</button>
+<button type="button" id="switch-player" class="secondary">Switch to ${playerMode === "plyr" ? "HTML5" : "Plyr"}</button>
 </div>
 </section>
 </article>
