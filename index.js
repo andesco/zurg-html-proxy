@@ -183,27 +183,30 @@ var index_default = {
     if (requestUrl.pathname === "/theatre-bootstrap") {
       return await handleTheatreBootstrap(request, env, requestUrl);
     }
-    const authFailure = await authenticateRequest(request, env);
-    if (authFailure) {
-      return authFailure;
+    const authSessionCookie = await authenticateRequest(request, env);
+    if (authSessionCookie instanceof Response) {
+      return authSessionCookie;
     }
     try {
-      if (requestUrl.pathname.startsWith("/fixtures/") && env.ASSETS) {
-        return env.ASSETS.fetch(request);
-      }
-      if (requestUrl.pathname === "/diagnostics") {
-        return htmlResponse(renderDiagnosticsPage(), 200, PLAYER_CSP);
-      }
-      if (requestUrl.pathname === "/media-redirect" || requestUrl.pathname === "/video-proxy") {
-        return await handleMediaRedirect(request, env, requestUrl);
-      }
-      if (requestUrl.pathname === "/") {
-        return htmlResponse(await renderLandingPage(requestUrl.origin, env), 200, DIRECTORY_CSP);
-      }
-      if (requestUrl.pathname.toLowerCase().endsWith(".strm")) {
-        return await handleStrmPage(request, env, requestUrl);
-      }
-      return await handleDirectoryPage(request, env, requestUrl);
+      const response = await (async () => {
+        if (requestUrl.pathname.startsWith("/fixtures/") && env.ASSETS) {
+          return env.ASSETS.fetch(request);
+        }
+        if (requestUrl.pathname === "/diagnostics") {
+          return htmlResponse(renderDiagnosticsPage(), 200, PLAYER_CSP);
+        }
+        if (requestUrl.pathname === "/media-redirect" || requestUrl.pathname === "/video-proxy") {
+          return await handleMediaRedirect(request, env, requestUrl);
+        }
+        if (requestUrl.pathname === "/") {
+          return htmlResponse(await renderLandingPage(requestUrl.origin, env), 200, DIRECTORY_CSP);
+        }
+        if (requestUrl.pathname.toLowerCase().endsWith(".strm")) {
+          return await handleStrmPage(request, env, requestUrl);
+        }
+        return await handleDirectoryPage(request, env, requestUrl);
+      })();
+      return addSessionCookie(response, authSessionCookie);
     } catch (error) {
       console.error(
         JSON.stringify({
@@ -213,10 +216,10 @@ var index_default = {
           name: error instanceof Error ? error.name : "UnknownError"
         })
       );
-      return new Response("Internal Server Error", {
+      return addSessionCookie(new Response("Internal Server Error", {
         status: 500,
         headers: securityHeaders()
-      });
+      }), authSessionCookie);
     }
   }
 };
@@ -248,7 +251,11 @@ async function authenticateRequest(request, env) {
       }
     });
   }
-  return null;
+  const newSessionToken = await createEncryptedToken(
+    { purpose: "session", expiresAt: Date.now() + SESSION_TOKEN_TTL_MS },
+    getStreamTokenSecret(env)
+  );
+  return buildSessionCookie(newSessionToken);
 }
 __name(authenticateRequest, "authenticateRequest");
 function readCookie(request, name) {
@@ -271,6 +278,19 @@ function buildSessionCookie(token) {
   return `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Max-Age=${Math.floor(SESSION_TOKEN_TTL_MS / 1e3)}; Path=/; Secure; HttpOnly; SameSite=Lax`;
 }
 __name(buildSessionCookie, "buildSessionCookie");
+function addSessionCookie(response, sessionCookie) {
+  if (!sessionCookie) {
+    return response;
+  }
+  const headers = new Headers(response.headers);
+  headers.set("Set-Cookie", sessionCookie);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
+}
+__name(addSessionCookie, "addSessionCookie");
 async function handleTheatreBootstrap(request, env, requestUrl) {
   if (request.method !== "GET") {
     return new Response("Method Not Allowed", {

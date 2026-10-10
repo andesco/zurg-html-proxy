@@ -110,8 +110,12 @@ The Worker puts a five-minute encrypted handoff token in the target URL. The
 public `/theatre-bootstrap` endpoint exchanges that token for a twelve-hour,
 HttpOnly, Secure session cookie before redirecting to `/`. This keeps the
 normal Basic Auth flow for ordinary browsing while avoiding the Tesla Theatre
-keyboard limitation. The handoff depends on Tesla’s current browser behavior
-and only works while the vehicle is parked. Similar implementations describe the mechanism in
+keyboard limitation. A successful ordinary Basic Auth request also establishes
+the same twelve-hour HttpOnly session cookie, so later visits do not need to
+prompt for credentials again as long as Tesla retains cookies. The credentials
+are never stored in localStorage or exposed to page JavaScript. The handoff
+depends on Tesla’s current browser behavior and only works while the vehicle is
+parked. Similar implementations describe the mechanism in
 [BigScrn’s explanation](https://bigscrn.com/how-it-works/) and
 [Fullscreen Hub’s guide](https://fullscreenhub.com/).
 
