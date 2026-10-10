@@ -869,6 +869,14 @@ function renderDiagnosticsPage() {
         "LFE/subwoofer · 110 Hz",
         "Surround left · 784 Hz",
         "Surround right · 880 Hz"
+      ],
+      fallbackTracks: [
+        { file: "aac-channel-fl.m4a", label: "Front left · 440 Hz · separate AAC" },
+        { file: "aac-channel-fr.m4a", label: "Front right · 554 Hz · separate AAC" },
+        { file: "aac-channel-fc.m4a", label: "Centre · 659 Hz · separate AAC" },
+        { file: "aac-channel-lfe.m4a", label: "LFE/subwoofer · 110 Hz · separate AAC" },
+        { file: "aac-channel-bl.m4a", label: "Surround left · 784 Hz · separate AAC" },
+        { file: "aac-channel-br.m4a", label: "Surround right · 880 Hz · separate AAC" }
       ]
     },
     {
@@ -889,6 +897,16 @@ function renderDiagnosticsPage() {
         "Back right · 880 Hz",
         "Surround left · 988 Hz",
         "Surround right · 1047 Hz"
+      ],
+      fallbackTracks: [
+        { file: "aac-channel-fl.m4a", label: "Front left · 440 Hz · separate AAC" },
+        { file: "aac-channel-fr.m4a", label: "Front right · 554 Hz · separate AAC" },
+        { file: "aac-channel-fc.m4a", label: "Centre · 659 Hz · separate AAC" },
+        { file: "aac-channel-lfe.m4a", label: "LFE/subwoofer · 110 Hz · separate AAC" },
+        { file: "aac-channel-bl.m4a", label: "Back left · 784 Hz · separate AAC" },
+        { file: "aac-channel-br.m4a", label: "Back right · 880 Hz · separate AAC" },
+        { file: "aac-channel-sl.m4a", label: "Surround left · 988 Hz · separate AAC" },
+        { file: "aac-channel-sr.m4a", label: "Surround right · 1047 Hz · separate AAC" }
       ]
     },
     {

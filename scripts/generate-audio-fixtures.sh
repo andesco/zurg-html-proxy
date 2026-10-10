@@ -70,6 +70,22 @@ make_fixture stereo aac 160k aac-track-1.m4a \
   '0.35*sin(2*PI*440*t)|0.35*sin(2*PI*440*t)'
 make_fixture stereo aac 160k aac-track-2.m4a \
   '0.35*sin(2*PI*880*t)|0.35*sin(2*PI*880*t)'
+make_fixture stereo aac 160k aac-channel-fl.m4a \
+  '0.35*sin(2*PI*440*t)|0.35*sin(2*PI*440*t)'
+make_fixture stereo aac 160k aac-channel-fr.m4a \
+  '0.35*sin(2*PI*554*t)|0.35*sin(2*PI*554*t)'
+make_fixture stereo aac 160k aac-channel-fc.m4a \
+  '0.35*sin(2*PI*659*t)|0.35*sin(2*PI*659*t)'
+make_fixture stereo aac 160k aac-channel-lfe.m4a \
+  '0.35*sin(2*PI*110*t)|0.35*sin(2*PI*110*t)'
+make_fixture stereo aac 160k aac-channel-bl.m4a \
+  '0.35*sin(2*PI*784*t)|0.35*sin(2*PI*784*t)'
+make_fixture stereo aac 160k aac-channel-br.m4a \
+  '0.35*sin(2*PI*880*t)|0.35*sin(2*PI*880*t)'
+make_fixture stereo aac 160k aac-channel-sl.m4a \
+  '0.35*sin(2*PI*988*t)|0.35*sin(2*PI*988*t)'
+make_fixture stereo aac 160k aac-channel-sr.m4a \
+  '0.35*sin(2*PI*1047*t)|0.35*sin(2*PI*1047*t)'
 
 # Each channel uses a different tone. The 659 Hz tone is in the centre channel,
 # making it easy to notice when a browser drops the dialogue channel.

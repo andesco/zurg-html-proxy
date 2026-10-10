@@ -181,7 +181,9 @@ through 18 cover:
 When Tesla does not expose embedded audio-track switching, Test 18 also offers
 two equivalent single-track AAC files so the two tones can still be selected
 and compared without pretending that the browser switched the original M4A’s
-embedded tracks.
+embedded tracks. Tests 16 and 17 similarly offer separate stereo-AAC channel
+files, allowing each tone to be checked even when the vehicle drops channels
+from the multichannel stream.
 
 Each fixture reports `canPlayType`, MediaCapabilities support, actual playback
 state, and whether the browser exposes an audio-track list. The multichannel
