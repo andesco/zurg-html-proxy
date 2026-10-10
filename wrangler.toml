@@ -1,9 +1,13 @@
 name = "zurg-html-proxy"
 account_id = "0a15c5f9d39350baa992ff9f48efc1c8"
 main = "index.js"
-compatibility_date = "2024-07-01"
+compatibility_date = "2026-08-19"
 compatibility_flags = ["nodejs_compat"]
 #workers_dev = false
+
+[assets]
+directory = "fixtures"
+binding = "ASSETS"
 
 # [vars]
 # ZURG_BASE_URL = ""

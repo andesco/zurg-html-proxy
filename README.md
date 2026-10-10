@@ -4,10 +4,11 @@ A Cloudflare Worker that proxies [Zurg](https://github.com/debridmediamonitor/zu
 
 ## Features
 
-- styled file navigation with [Pico CSS](https://picocss.com/)
+- styled file navigation and playback pages
 - in-browser media player with [Plyr](https://plyr.io/)
 - basic authentication
 - supports Tesla web browser and full-screen theatre mode
+- `/diagnostics` playback lab with six video and nine audio fixtures
 
 ## How It Works
 
@@ -102,7 +103,7 @@ The `/video-proxy` endpoint solves CORS issues from Real-Debrid:
 
 - strips `Content-Disposition: attachment` header
 - adds proper CORS headers
-- sets `Content-Type: video/mp4`
+- preserves the upstream media type and byte-range headers
 - supports Range requests for seeking
 - directs data streams without buffering (efficient for large files)
 
@@ -137,3 +138,26 @@ JavaScript. In that case the selector reports that limitation; the browser
 cannot switch tracks in a progressive MP4/MKV file without a remux/transcode.
 For those clients, prefer a stereo AAC release or use a Zurg filter that only
 publishes compatible media.
+
+## Audio Capability Diagnostics
+
+Open `/diagnostics` while parked and run the audio tests one at a time. Tests 7
+through 15 cover:
+
+- AAC-LC mono, stereo, 5.1, and 7.1 in M4A/MP4;
+- Opus stereo and 5.1 in WebM;
+- MP3 stereo; and
+- AC-3 and E-AC-3 5.1 in MP4.
+
+Each fixture reports `canPlayType`, MediaCapabilities support, actual playback
+state, and whether the browser exposes an audio-track list. The multichannel
+fixtures use a different tone per channel, with a 659 Hz tone in the centre
+channel. A `PLAYING` result confirms decoding and timeline advancement; listen
+for the centre tone to check whether the browser or vehicle audio path keeps the
+dialogue channel audible.
+
+The small test files can be regenerated with:
+
+```bash
+./scripts/generate-audio-fixtures.sh fixtures
+```
