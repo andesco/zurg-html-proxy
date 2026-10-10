@@ -1,12 +1,13 @@
 # Zurg HTML Proxy and Media Player
 
-A Cloudflare Worker that proxies [Zurg](https://github.com/debridmediamonitor/zurg) and its basic HTML endpoint and .STRM files into a streamable video player interface.
+A Cloudflare Worker that authenticates and presents [Zurg](https://github.com/debridmediamonitor/zurg) media as a streamable video player interface. The Worker brokers short-lived direct media URLs; it does not carry the media stream.
 
 ## Features
 
 - styled file navigation and playback pages
 - in-browser media player with [Plyr](https://plyr.io/)
 - basic authentication
+- direct-to-origin media delivery without Worker bandwidth transit
 - supports Tesla web browser and full-screen theatre mode
 - `/diagnostics` playback lab with six video and nine audio fixtures
 
@@ -14,10 +15,16 @@ A Cloudflare Worker that proxies [Zurg](https://github.com/debridmediamonitor/zu
 
 Zurg provides a basic HTML file browser at `/http`. The Cloudflare Worker:
 1. proxies the Zurg HTML endpoint;
-2. applies modern CSS styling to directory listings;
+2. applies Pico CSS styling to directory listings;
 3. converts .strm files into playable video pages;
-4. fixes headers from Real-Debrid for browser compatibility; and
-5. directs video streams with light-weight CORS-enabled proxy.
+4. validates the upstream media origin and source scheme;
+5. creates a short-lived encrypted stream token; and
+6. redirects the browser to the signed upstream media URL.
+
+The Worker does not proxy media bytes. The upstream must provide an HTTPS URL
+that the browser can play directly, typically a URL containing its own
+short-lived access token. Sources with embedded credentials or an HTTP URL on
+an HTTPS Worker page are rejected instead of being relayed through Cloudflare.
 
 ## Deploy to Cloudflare
    
@@ -97,41 +104,39 @@ fullscreenLink.href = 'https://youtube.com/redirect?q=' + encodeURIComponent(vid
 
 ## Technical Details
 
-### Video Proxy Endpoint
+### Direct Media Redirect Endpoint
 
-The `/video-proxy` endpoint solves CORS issues from Real-Debrid:
+The `/media-redirect` endpoint is an authenticated token broker:
 
-- strips `Content-Disposition: attachment` header
-- adds proper CORS headers
-- preserves the upstream media type and byte-range headers
-- supports Range requests for seeking
-- directs data streams without buffering (efficient for large files)
+- validates the encrypted, expiring stream token;
+- verifies the source origin against the allowlist;
+- rejects credentials embedded in the upstream URL; and
+- returns an HTTP redirect to the upstream URL.
+
+The legacy `/video-proxy` path is retained only as a redirect-only alias for
+already-open player pages. It cannot proxy or rewrite a media response.
 
 ### Architecture
 
 ```
-Browser → Cloudflare Worker → Zurg → Real-Debrid
-          (CORS + Headers)
-          
-Browser ← Cloudflare Worker ← Real-Debrid media cache
-          
+Browser → Cloudflare Worker
+          (auth + token broker + redirect)
+
+Browser → signed Zurg/Real-Debrid media URL
+          (media bytes bypass this Worker)
 ```
-> [!important]
-> **`Response.body`**<br>All video data streams through the Worker, but uses `Response.body` passthrough for minimal CPU usage and unlimited bandwidth.
 
 ## Audio Tracks and Container Compatibility
 
-The Plyr and native HTML5 player modes share an `Audio track` selector. When the
-browser exposes the standard `HTMLMediaElement.audioTracks` API, it can switch
-between embedded AAC tracks without reloading the media.
+The Worker does not rewrite, select, downmix, remux, or transcode audio. Plyr
+and the native player operate on the same browser media element, using the
+headers and track layout provided by the direct upstream response.
 
-They also provide an `Audio output` selector. `Stereo downmix` is the default
-and folds the centre, surround, and LFE channels into left/right output, which
-keeps dialogue audible on stereo devices when the source is AAC 5.1.
-
-The media proxy preserves the upstream `Content-Type` and byte-range headers.
-That matters when a source is MKV rather than MP4: relabeling an MKV stream as
-`video/mp4` can stop the browser from detecting its audio tracks.
+The diagnostics page reports whether the browser exposes the standard
+`HTMLMediaElement.audioTracks` API. Track selection is only possible when the
+browser exposes that API or provides its own native media control. If it does
+not, a progressive MP4/MKV cannot be switched from page JavaScript without a
+server-side remux/transcode.
 
 Some Chromium-based browsers do not expose embedded-track switching to page
 JavaScript. In that case the selector reports that limitation; the browser

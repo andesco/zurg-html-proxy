@@ -150,15 +150,6 @@ var FORWARDED_REQUEST_HEADERS = [
   "Depth",
   "Translate"
 ];
-var FORWARDED_MEDIA_HEADERS = [
-  "Accept-Ranges",
-  "Content-Length",
-  "Content-Range",
-  "Content-Type",
-  "ETag",
-  "Last-Modified",
-  "Vary"
-];
 var PICO_STYLESHEET = '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.min.css" integrity="sha384-L1dWfspMTHU/ApYnFiMz2QID/PlP1xCW9visvBdbEkOLkSSWsP6ZJWhPw6apiXxU" crossorigin="anonymous">';
 var DIRECTORY_CSP = "default-src 'none'; style-src https://cdn.jsdelivr.net; base-uri 'none'; frame-ancestors 'none'";
 var PLAYER_CSP = "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; style-src 'self' 'unsafe-inline' https://cdn.plyr.io https://cdn.jsdelivr.net; script-src 'self' 'unsafe-inline' https://cdn.plyr.io; media-src 'self' http: https:; img-src 'self' data: https:; connect-src 'self'";
@@ -176,8 +167,8 @@ var index_default = {
       if (requestUrl.pathname === "/diagnostics") {
         return htmlResponse(renderDiagnosticsPage(), 200, PLAYER_CSP);
       }
-      if (requestUrl.pathname === "/video-proxy") {
-        return await handleVideoProxy(request, env, requestUrl);
+      if (requestUrl.pathname === "/media-redirect" || requestUrl.pathname === "/video-proxy") {
+        return await handleMediaRedirect(request, env, requestUrl);
       }
       if (requestUrl.pathname === "/") {
         return htmlResponse(renderLandingPage(), 200, DIRECTORY_CSP);
@@ -332,22 +323,23 @@ async function handleStrmPage(request, env, requestUrl) {
   const downloadName = decodePathSegment(rawFileName).replace(/\.strm$/i, "") || "media";
   const title = downloadName.replace(/\./g, " ").replace(/\s+/g, " ").trim() || "Media";
   const folder = pathParts.length > 2 ? decodePathSegment(pathParts.at(-2)) : "";
+  const directDeliveryError = getDirectDeliveryError(sourceUrl, requestUrl);
+  if (directDeliveryError) {
+    return new Response(directDeliveryError, {
+      status: 502,
+      headers: securityHeaders()
+    });
+  }
   const playerMode = requestUrl.searchParams.get("player") === "plyr" ? "plyr" : "native";
-  const sourceNeedsProxy = Boolean(sourceUrl.username || sourceUrl.password) || requestUrl.protocol === "https:" && sourceUrl.protocol === "http:";
   const streamToken = await createStreamToken(
     sourceUrl.toString(),
     Date.now() + STREAM_TOKEN_TTL_MS,
     getStreamTokenSecret(env),
     downloadName
   );
-  const streamUrl = new URL("/video-proxy", requestUrl.origin);
+  const streamUrl = new URL("/media-redirect", requestUrl.origin);
   streamUrl.searchParams.set("token", streamToken);
-  if (sourceNeedsProxy) {
-    streamUrl.searchParams.set("mode", "proxy");
-  }
-  const fallbackUrl = new URL(streamUrl.href);
-  fallbackUrl.searchParams.set("mode", "proxy");
-  const downloadUrl = new URL(fallbackUrl.href);
+  const downloadUrl = new URL(streamUrl.href);
   downloadUrl.searchParams.set("download", "1");
   return htmlResponse(
     renderPlayerPage({
@@ -355,10 +347,8 @@ async function handleStrmPage(request, env, requestUrl) {
       folder,
       playerMode,
       streamUrl: relativeUrl(streamUrl),
-      fallbackUrl: relativeUrl(fallbackUrl),
       downloadUrl: relativeUrl(downloadUrl),
-      resumeKey: `zurg-playback:${requestUrl.pathname}`,
-      sourceNeedsProxy
+      resumeKey: `zurg-playback:${requestUrl.pathname}`
     }),
     200,
     PLAYER_CSP
@@ -375,17 +365,21 @@ function isAllowedSourceUrl(sourceUrl, env) {
   return (/* @__PURE__ */ new Set([zurgOrigin, ...configuredOrigins])).has(sourceUrl.origin);
 }
 __name(isAllowedSourceUrl, "isAllowedSourceUrl");
-async function handleVideoProxy(request, env, requestUrl) {
-  if (request.method === "OPTIONS") {
-    return new Response(null, {
-      status: 204,
-      headers: videoCorsHeaders(request)
-    });
+function getDirectDeliveryError(sourceUrl, requestUrl) {
+  if (sourceUrl.username || sourceUrl.password) {
+    return "Direct media delivery does not accept embedded upstream credentials. Configure the upstream to issue a signed HTTPS media URL instead.";
   }
+  if (requestUrl.protocol === "https:" && sourceUrl.protocol !== "https:") {
+    return "Direct media delivery requires an HTTPS upstream when the Worker page is HTTPS.";
+  }
+  return "";
+}
+__name(getDirectDeliveryError, "getDirectDeliveryError");
+async function handleMediaRedirect(request, env, requestUrl) {
   if (!["GET", "HEAD"].includes(request.method)) {
     return new Response("Method Not Allowed", {
       status: 405,
-      headers: { Allow: "GET, HEAD, OPTIONS" }
+      headers: { Allow: "GET, HEAD" }
     });
   }
   const token = requestUrl.searchParams.get("token");
@@ -419,31 +413,16 @@ async function handleVideoProxy(request, env, requestUrl) {
       headers: securityHeaders()
     });
   }
-  const explicitlyProxy = requestUrl.searchParams.get("mode") === "proxy";
-  const requiresProxy = explicitlyProxy || Boolean(sourceUrl.username || sourceUrl.password) || requestUrl.protocol === "https:" && sourceUrl.protocol === "http:";
-  if (!requiresProxy) {
-    if (await sourceAdvertisesAttachment(sourceUrl)) {
-      const compatibilityUrl = new URL(requestUrl.href);
-      compatibilityUrl.searchParams.set("mode", "proxy");
-      return redirectResponse(compatibilityUrl.href);
-    }
-    return redirectResponse(sourceUrl.href);
-  }
-  return proxyMediaResponse(request, sourceUrl, descriptor.downloadName, requestUrl.searchParams.get("download") === "1");
-}
-__name(handleVideoProxy, "handleVideoProxy");
-async function sourceAdvertisesAttachment(sourceUrl) {
-  try {
-    const response = await fetch(sourceUrl, {
-      method: "HEAD",
-      redirect: "follow"
+  const directDeliveryError = getDirectDeliveryError(sourceUrl, requestUrl);
+  if (directDeliveryError) {
+    return new Response(directDeliveryError, {
+      status: 502,
+      headers: securityHeaders()
     });
-    return /attachment/i.test(response.headers.get("Content-Disposition") || "");
-  } catch {
-    return false;
   }
+  return redirectResponse(sourceUrl.href);
 }
-__name(sourceAdvertisesAttachment, "sourceAdvertisesAttachment");
+__name(handleMediaRedirect, "handleMediaRedirect");
 function redirectResponse(location) {
   return new Response(null, {
     status: 302,
@@ -454,85 +433,6 @@ function redirectResponse(location) {
   });
 }
 __name(redirectResponse, "redirectResponse");
-async function proxyMediaResponse(request, sourceUrl, downloadName, asDownload) {
-  const upstreamUrl = new URL(sourceUrl.href);
-  const headers = new Headers();
-  for (const headerName of FORWARDED_REQUEST_HEADERS) {
-    const value = request.headers.get(headerName);
-    if (value) {
-      headers.set(headerName, value);
-    }
-  }
-  if (sourceUrl.username || sourceUrl.password) {
-    const username = decodePathSegment(sourceUrl.username);
-    const password = decodePathSegment(sourceUrl.password);
-    headers.set("Authorization", `Basic ${base64Encode(`${username}:${password}`)}`);
-    upstreamUrl.username = "";
-    upstreamUrl.password = "";
-  }
-  const upstreamResponse = await fetch(upstreamUrl, {
-    method: request.method,
-    headers,
-    redirect: "follow"
-  });
-  const responseHeaders = new Headers(securityHeaders());
-  for (const headerName of FORWARDED_MEDIA_HEADERS) {
-    const value = upstreamResponse.headers.get(headerName);
-    if (value) {
-      responseHeaders.set(headerName, value);
-    }
-  }
-  if (!responseHeaders.has("Content-Type")) {
-    const inferredType = inferMediaType(upstreamResponse.url || upstreamUrl.href);
-    if (inferredType) {
-      responseHeaders.set("Content-Type", inferredType);
-    }
-  }
-  if (asDownload) {
-    responseHeaders.set("Content-Disposition", makeAttachmentHeader(downloadName));
-  }
-  for (const [name, value] of Object.entries(videoCorsHeaders(request))) {
-    responseHeaders.set(name, value);
-  }
-  return new Response(request.method === "HEAD" ? null : upstreamResponse.body, {
-    status: upstreamResponse.status,
-    statusText: upstreamResponse.statusText,
-    headers: responseHeaders
-  });
-}
-__name(proxyMediaResponse, "proxyMediaResponse");
-function inferMediaType(urlString) {
-  try {
-    const pathname = new URL(urlString).pathname.toLowerCase();
-    if (pathname.endsWith(".mp4")) return "video/mp4";
-    if (pathname.endsWith(".m4v")) return "video/x-m4v";
-    if (pathname.endsWith(".webm")) return "video/webm";
-    return "";
-  } catch {
-    return "";
-  }
-}
-__name(inferMediaType, "inferMediaType");
-function makeAttachmentHeader(fileName) {
-  const cleanName = String(fileName || "media").replace(/[\r\n"\\/]/g, "_").replace(/[^\p{L}\p{N}._ -]/gu, "_").slice(0, 160) || "media";
-  const fallbackName = cleanName.replace(/[^A-Za-z0-9._-]/g, "_") || "media";
-  return `attachment; filename="${fallbackName}"; filename*=UTF-8''${encodeURIComponent(cleanName)}`;
-}
-__name(makeAttachmentHeader, "makeAttachmentHeader");
-function videoCorsHeaders(request) {
-  const headers = {
-    "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
-    "Access-Control-Allow-Headers": "Range, If-Range, If-None-Match, If-Modified-Since",
-    "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges, Content-Type, ETag"
-  };
-  const origin = request.headers.get("Origin");
-  if (origin && origin === new URL(request.url).origin) {
-    headers["Access-Control-Allow-Origin"] = origin;
-    headers.Vary = "Origin";
-  }
-  return headers;
-}
-__name(videoCorsHeaders, "videoCorsHeaders");
 async function handleDirectoryPage(request, env, requestUrl) {
   const targetUrl = buildZurgTarget(requestUrl, env);
   const response = await fetchZurg(request, env, requestUrl);
@@ -1165,7 +1065,7 @@ ${listing}
 </html>`;
 }
 __name(renderDirectoryPage, "renderDirectoryPage");
-function renderPlayerPage({ title, folder, playerMode, streamUrl, fallbackUrl, downloadUrl, resumeKey, sourceNeedsProxy }) {
+function renderPlayerPage({ title, folder, playerMode, streamUrl, downloadUrl, resumeKey }) {
   const playerAssets = playerMode === "plyr" ? `<link rel="stylesheet" href="${PLYR_CSS_URL}" integrity="${PLYR_CSS_INTEGRITY}" crossorigin="anonymous">` : "";
   const plyrScript = playerMode === "plyr" ? `<script src="${PLYR_JS_URL}" integrity="${PLYR_JS_INTEGRITY}" crossorigin="anonymous"><\/script>` : "";
   const config = {
@@ -1173,10 +1073,8 @@ function renderPlayerPage({ title, folder, playerMode, streamUrl, fallbackUrl, d
     folder,
     playerMode,
     streamUrl,
-    fallbackUrl,
     downloadUrl,
-    resumeKey,
-    sourceNeedsProxy
+    resumeKey
   };
   return `<!doctype html>
 <html lang="en">
@@ -1200,13 +1098,12 @@ ${folder ? `<h2>${escapeHtml(folder)}</h2>` : ""}
 <div class="overflow-auto">
 <video id="player" width="640" controls playsinline preload="metadata" src="${escapeHtml(streamUrl)}"></video>
 </div>
-<p id="status" role="status">${sourceNeedsProxy ? "Using the compatibility proxy for this authenticated source." : "Direct media redirect enabled."}</p>
-<p id="error" role="alert" hidden>Playback could not start. Try the compatibility proxy.</p>
+<p id="status" role="status">Direct media delivery enabled. Cloudflare authorizes the source URL, then the browser fetches media directly from the upstream.</p>
+<p id="error" role="alert" hidden>Direct playback could not start. The upstream must provide an HTTPS, browser-compatible media URL. No compatibility relay is available.</p>
 <div>
 <a href="/http/" role="button" class="secondary">Browse files</a>
 <a href="/diagnostics" role="button" class="secondary">Diagnostics</a>
 <button type="button" id="theatre-button" class="secondary">Theatre mode</button>
-<button type="button" id="fallback-button" class="secondary"${sourceNeedsProxy ? " hidden" : ""}>Try compatibility proxy</button>
 <button type="button" id="copy-button" class="secondary">Copy page URL</button>
 <button type="button" id="download-button" class="secondary">Download media</button>
 <button type="button" id="switch-player" class="secondary">Switch to ${playerMode === "plyr" ? "native" : "Plyr"}</button>
@@ -1222,7 +1119,6 @@ ${plyrScript}
   const video = document.getElementById('player');
   const status = document.getElementById('status');
   const error = document.getElementById('error');
-  const fallbackButton = document.getElementById('fallback-button');
   const copyButton = document.getElementById('copy-button');
   const downloadButton = document.getElementById('download-button');
   const theatreButton = document.getElementById('theatre-button');
@@ -1254,18 +1150,7 @@ ${plyrScript}
 
   video.addEventListener('error', () => {
     error.hidden = false;
-    if (!config.sourceNeedsProxy) fallbackButton.hidden = false;
     setStatus('The source could not be played in this browser.', true);
-  });
-
-  fallbackButton.addEventListener('click', () => {
-    savePosition();
-    fallbackButton.disabled = true;
-    error.hidden = true;
-    setStatus('Retrying through the compatibility proxy\u2026');
-    video.src = config.fallbackUrl;
-    video.load();
-    video.play().catch(() => {});
   });
 
   async function copyText(value) {
@@ -1289,7 +1174,7 @@ ${plyrScript}
 
   copyButton.addEventListener('click', () => copyText(window.location.href));
   downloadButton.addEventListener('click', () => {
-    if (confirm('Download this media through the compatibility proxy?')) {
+    if (confirm('Open the direct media URL? The upstream controls whether it plays inline or downloads.')) {
       window.location.href = config.downloadUrl;
     }
   });
