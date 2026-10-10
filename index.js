@@ -88,20 +88,20 @@ async function deriveTokenKey(secret) {
   return crypto.subtle.importKey("raw", digest, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
 }
 __name(deriveTokenKey, "deriveTokenKey");
-async function createStreamToken(sourceUrl, expiresAt, secret, downloadName = "") {
+async function createEncryptedToken(payload, secret) {
   if (!secret) {
     throw new Error("The Worker token key is not configured");
   }
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const payload = textEncoder.encode(JSON.stringify({ sourceUrl, expiresAt, downloadName }));
+  const plaintext = textEncoder.encode(JSON.stringify(payload));
   const key = await deriveTokenKey(secret);
   const ciphertext = new Uint8Array(
-    await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, payload)
+    await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext)
   );
   return `v1.${encodeBase64Url(iv)}.${encodeBase64Url(ciphertext)}`;
 }
-__name(createStreamToken, "createStreamToken");
-async function readStreamToken(token, secret) {
+__name(createEncryptedToken, "createEncryptedToken");
+async function readEncryptedToken(token, secret) {
   if (!secret) {
     throw new Error("The Worker token key is not configured");
   }
@@ -116,8 +116,20 @@ async function readStreamToken(token, secret) {
     decodeBase64Url(parts[2])
   );
   const payload = JSON.parse(textDecoder.decode(plaintext));
-  if (!payload || typeof payload.sourceUrl !== "string" || typeof payload.expiresAt !== "number" || payload.expiresAt <= Date.now()) {
-    throw new Error("Expired stream token");
+  if (!payload || typeof payload !== "object" || typeof payload.expiresAt !== "number" || payload.expiresAt <= Date.now()) {
+    throw new Error("Expired token");
+  }
+  return payload;
+}
+__name(readEncryptedToken, "readEncryptedToken");
+async function createStreamToken(sourceUrl, expiresAt, secret, downloadName = "") {
+  return createEncryptedToken({ sourceUrl, expiresAt, downloadName }, secret);
+}
+__name(createStreamToken, "createStreamToken");
+async function readStreamToken(token, secret) {
+  const payload = await readEncryptedToken(token, secret);
+  if (typeof payload.sourceUrl !== "string") {
+    throw new Error("Invalid stream token");
   }
   return {
     sourceUrl: payload.sourceUrl,
@@ -137,6 +149,9 @@ var PLYR_JS_URL = `https://cdn.plyr.io/${PLYR_VERSION}/plyr.polyfilled.js`;
 var PLYR_CSS_INTEGRITY = "sha384-VqqE0KSv00qfHvKpRa8aov+g3xtUu2Rw0NsEmtjTOPGn/JDKVghgd56iw/VObHa7";
 var PLYR_JS_INTEGRITY = "sha384-ZDYtn77N2Oxc6W8oilE9z73hj1EZqidVlQeqTwsKW19gglwyUYHMn/LzX+ewyFJD";
 var STREAM_TOKEN_TTL_MS = 24 * 60 * 60 * 1e3;
+var THEATRE_TOKEN_TTL_MS = 5 * 60 * 1e3;
+var SESSION_TOKEN_TTL_MS = 12 * 60 * 60 * 1e3;
+var SESSION_COOKIE_NAME = "zurg_session";
 var MAX_STRM_BYTES = 64 * 1024;
 var MAX_DIRECTORY_BYTES = 2 * 1024 * 1024;
 var FORWARDED_REQUEST_HEADERS = [
@@ -156,7 +171,10 @@ var PLAYER_CSP = "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; s
 var index_default = {
   async fetch(request, env) {
     const requestUrl = new URL(request.url);
-    const authFailure = authenticateRequest(request, env);
+    if (requestUrl.pathname === "/theatre-bootstrap") {
+      return await handleTheatreBootstrap(request, env, requestUrl);
+    }
+    const authFailure = await authenticateRequest(request, env);
     if (authFailure) {
       return authFailure;
     }
@@ -171,7 +189,7 @@ var index_default = {
         return await handleMediaRedirect(request, env, requestUrl);
       }
       if (requestUrl.pathname === "/") {
-        return htmlResponse(renderLandingPage(requestUrl.origin), 200, DIRECTORY_CSP);
+        return htmlResponse(await renderLandingPage(requestUrl.origin, env), 200, DIRECTORY_CSP);
       }
       if (requestUrl.pathname.toLowerCase().endsWith(".strm")) {
         return await handleStrmPage(request, env, requestUrl);
@@ -193,12 +211,23 @@ var index_default = {
     }
   }
 };
-function authenticateRequest(request, env) {
+async function authenticateRequest(request, env) {
   if (!env.WORKER_USERNAME || !env.WORKER_PASSWORD) {
     return new Response("Worker authentication is not configured", {
       status: 500,
       headers: securityHeaders()
     });
+  }
+  const sessionToken = readCookie(request, SESSION_COOKIE_NAME);
+  if (sessionToken) {
+    try {
+      const session = await readEncryptedToken(sessionToken, getStreamTokenSecret(env));
+      if (session.purpose === "session") {
+        return null;
+      }
+    } catch {
+      // Fall through to Basic Auth so an expired or malformed session can recover.
+    }
   }
   const credentials = parseBasicAuth(request.headers.get("Authorization"));
   if (!credentials || !timingSafeStringEqual(credentials.username, env.WORKER_USERNAME) || !timingSafeStringEqual(credentials.password, env.WORKER_PASSWORD)) {
@@ -213,6 +242,61 @@ function authenticateRequest(request, env) {
   return null;
 }
 __name(authenticateRequest, "authenticateRequest");
+function readCookie(request, name) {
+  const cookieHeader = request.headers.get("Cookie") || "";
+  for (const part of cookieHeader.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator < 0 || part.slice(0, separator).trim() !== name) {
+      continue;
+    }
+    try {
+      return decodeURIComponent(part.slice(separator + 1).trim());
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+__name(readCookie, "readCookie");
+function buildSessionCookie(token) {
+  return `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Max-Age=${Math.floor(SESSION_TOKEN_TTL_MS / 1e3)}; Path=/; Secure; HttpOnly; SameSite=Lax`;
+}
+__name(buildSessionCookie, "buildSessionCookie");
+async function handleTheatreBootstrap(request, env, requestUrl) {
+  if (request.method !== "GET") {
+    return new Response("Method Not Allowed", {
+      status: 405,
+      headers: { ...securityHeaders(), Allow: "GET" }
+    });
+  }
+  try {
+    const theatrePayload = await readEncryptedToken(
+      requestUrl.searchParams.get("token") || "",
+      getStreamTokenSecret(env)
+    );
+    if (theatrePayload.purpose !== "theatre-bootstrap") {
+      throw new Error("Invalid theatre token");
+    }
+    const sessionToken = await createEncryptedToken(
+      { purpose: "session", expiresAt: Date.now() + SESSION_TOKEN_TTL_MS },
+      getStreamTokenSecret(env)
+    );
+    return new Response(null, {
+      status: 302,
+      headers: {
+        ...securityHeaders(),
+        Location: "/",
+        "Set-Cookie": buildSessionCookie(sessionToken)
+      }
+    });
+  } catch {
+    return new Response("Invalid or expired theatre token", {
+      status: 404,
+      headers: securityHeaders()
+    });
+  }
+}
+__name(handleTheatreBootstrap, "handleTheatreBootstrap");
 function securityHeaders() {
   return {
     "Cache-Control": "no-store",
@@ -483,8 +567,16 @@ function buildTeslaTheatreUrl(targetUrl) {
   return redirectUrl.href;
 }
 __name(buildTeslaTheatreUrl, "buildTeslaTheatreUrl");
-function renderLandingPage(workerOrigin) {
-  const theatreUrl = buildTeslaTheatreUrl(`${workerOrigin}/`);
+async function renderLandingPage(workerOrigin, env) {
+  const theatreTarget = new URL("/theatre-bootstrap", workerOrigin);
+  theatreTarget.searchParams.set(
+    "token",
+    await createEncryptedToken(
+      { purpose: "theatre-bootstrap", expiresAt: Date.now() + THEATRE_TOKEN_TTL_MS },
+      getStreamTokenSecret(env)
+    )
+  );
+  const theatreUrl = buildTeslaTheatreUrl(theatreTarget.href);
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -656,6 +748,58 @@ function renderDiagnosticsPage() {
       channels: 6,
       bitrate: 384000,
       samplerate: 48000
+    },
+    {
+      test: 16,
+      label: "AAC-LC 5.1 sequential channel parade",
+      file: "aac-5.1-parade.m4a",
+      expected: "M4A/MP4 · AAC-LC (mp4a.40.2) · 5.1 · one isolated channel at a time",
+      type: 'audio/mp4; codecs="mp4a.40.2"',
+      channels: 6,
+      bitrate: 384000,
+      samplerate: 48000,
+      channelSequence: [
+        "Front left · 440 Hz",
+        "Front right · 554 Hz",
+        "Centre · 659 Hz",
+        "LFE/subwoofer · 110 Hz",
+        "Surround left · 784 Hz",
+        "Surround right · 880 Hz"
+      ]
+    },
+    {
+      test: 17,
+      label: "AAC-LC 7.1 sequential channel parade",
+      file: "aac-7.1-parade.m4a",
+      expected: "M4A/MP4 · AAC-LC (mp4a.40.2) · 7.1 · one isolated channel at a time",
+      type: 'audio/mp4; codecs="mp4a.40.2"',
+      channels: 8,
+      bitrate: 512000,
+      samplerate: 48000,
+      channelSequence: [
+        "Front left · 440 Hz",
+        "Front right · 554 Hz",
+        "Centre · 659 Hz",
+        "LFE/subwoofer · 110 Hz",
+        "Back left · 784 Hz",
+        "Back right · 880 Hz",
+        "Surround left · 988 Hz",
+        "Surround right · 1047 Hz"
+      ]
+    },
+    {
+      test: 18,
+      label: "AAC-LC two-track stereo in M4A",
+      file: "aac-multi-track.m4a",
+      expected: "M4A/MP4 · two AAC-LC stereo tracks · 48 kHz · 440 Hz vs 880 Hz",
+      type: 'audio/mp4; codecs="mp4a.40.2"',
+      channels: 2,
+      bitrate: 160000,
+      samplerate: 48000,
+      trackSequence: [
+        "Track 1 · 440 Hz · English",
+        "Track 2 · 880 Hz · commentary"
+      ]
     }
   ];
   return `<!doctype html>
@@ -671,11 +815,11 @@ ${BLADES_STYLESHEET}
 <article>
 <header>
 <h1>Playback diagnostics</h1>
-<p>Run this page on macOS Safari, iOS Safari, and the Tesla browser while parked. Video tests are numbered <strong>Test 1</strong> through <strong>Test 6</strong>; audio tests are <strong>Test 7</strong> through <strong>Test 15</strong>. Use one test button at a time, confirm that the card changes to PLAYING, watch or listen to the fixture, and record both capability and real playback results. Capability APIs are hints; actual playback is the meaningful test.</p>
+<p>Run this page on macOS Safari, iOS Safari, and the Tesla browser while parked. Video tests are numbered <strong>Test 1</strong> through <strong>Test 6</strong>; audio tests are <strong>Test 7</strong> through <strong>Test 18</strong>. Use one test button at a time, confirm that the card changes to PLAYING, watch or listen to the fixture, and record both capability and real playback results. Capability APIs are hints; actual playback is the meaningful test.</p>
 </header>
 <div id="fixtures"></div>
 <h2>Audio capability tests</h2>
-<p>Each audio fixture is a three-second file with a different tone per channel. The centre channel uses 659 Hz, so a stereo downmix should make it audible. A PLAYING result confirms that the browser decoded and advanced the file; it does not prove that every channel was routed correctly.</p>
+<p>Tests 7 through 15 are codec and timeline checks; their simultaneous multichannel mixes may sound similar after a vehicle stereo downmix. Tests 16 and 17 play one AAC channel at a time in the sequence shown on each card, so listen for the order and identify whether the centre channel is audible. Test 18 contains two separate AAC tracks; use the embedded-track selector when the browser exposes it. A PLAYING result confirms decoding and timeline advancement, not correct channel routing.</p>
 <div id="audio-fixtures"></div>
 </article>
 </main>
@@ -931,16 +1075,63 @@ ${BLADES_STYLESHEET}
       metadata: 'loading',
       mediaCapabilities: 'checking',
       audioTracks: 'checking',
+      selectedTrack: 'not selected',
       playback: 'ready'
     };
-    const readAudioTracks = () => {
+    const trackLabel = document.createElement('label');
+    trackLabel.htmlFor = 'audio-track-' + fixture.test;
+    trackLabel.textContent = 'Embedded audio track';
+    const trackSelect = document.createElement('select');
+    trackSelect.id = 'audio-track-' + fixture.test;
+    trackSelect.disabled = true;
+    trackSelect.innerHTML = '<option value="">Track selection unavailable</option>';
+    const trackStatus = document.createElement('small');
+    trackStatus.textContent = 'Track information will appear after the file metadata loads.';
+    const getAudioTracks = () => {
       try {
         const tracks = audio.audioTracks;
-        if (!tracks || typeof tracks.length !== 'number') return 'not exposed by this browser';
-        return tracks.length + ' track(s) exposed';
+        if (!tracks || typeof tracks.length !== 'number') return null;
+        return Array.from({ length: tracks.length }, (_, index) => tracks[index]);
       } catch (_) {
-        return 'unavailable';
+        return null;
       }
+    };
+    const describeTrack = (track, index) => {
+      const parts = [track && track.label ? track.label : 'Track ' + (index + 1)];
+      if (track && track.language) parts.push(track.language);
+      if (track && track.kind) parts.push(track.kind);
+      return parts.join(' · ');
+    };
+    const refreshAudioTrackSelector = () => {
+      const tracks = getAudioTracks();
+      trackSelect.textContent = '';
+      if (!tracks) {
+        state.audioTracks = 'not exposed by this browser';
+        state.selectedTrack = 'not available';
+        trackSelect.disabled = true;
+        trackSelect.append(new Option('Track selection unavailable', ''));
+        trackStatus.textContent = 'This browser does not expose HTMLMediaElement.audioTracks; use its native media menu if available.';
+        return;
+      }
+      state.audioTracks = tracks.length + ' track(s) exposed';
+      if (tracks.length === 0) {
+        state.selectedTrack = 'none';
+        trackSelect.disabled = true;
+        trackSelect.append(new Option('No embedded tracks reported', ''));
+        trackStatus.textContent = 'The browser reported no separate embedded audio tracks.';
+        return;
+      }
+      tracks.forEach((track, index) => {
+        trackSelect.append(new Option(describeTrack(track, index), String(index)));
+      });
+      const enabledIndex = tracks.findIndex((track) => track && track.enabled === true);
+      const selectedIndex = enabledIndex >= 0 ? enabledIndex : 0;
+      trackSelect.value = String(selectedIndex);
+      trackSelect.disabled = tracks.length < 2;
+      state.selectedTrack = describeTrack(tracks[selectedIndex], selectedIndex);
+      trackStatus.textContent = tracks.length > 1
+        ? 'Choose a track, then listen for its distinct test tone.'
+        : 'Only one embedded audio track was reported.';
     };
     const renderResult = () => {
       const decodedAudio = typeof audio.webkitAudioDecodedByteCount === 'number'
@@ -952,6 +1143,7 @@ ${BLADES_STYLESHEET}
         'playback: ' + state.playback,
         'expected channels: ' + fixture.channels,
         'audio tracks API: ' + state.audioTracks,
+        'selected audio track: ' + state.selectedTrack,
         'decoded audio: ' + decodedAudio,
         'time: ' + formatTime(audio.currentTime) + ' / ' + formatTime(audio.duration),
         'metadata: ' + state.metadata,
@@ -966,7 +1158,15 @@ ${BLADES_STYLESHEET}
     link.rel = 'noreferrer';
     const fixtureActions = document.createElement('div');
     fixtureActions.append(playButton, link);
-    card.append(testIndex, heading, specification, playbackState, audio, progress, result, fixtureActions);
+    const sequence = document.createElement('p');
+    if (fixture.channelSequence) {
+      sequence.textContent = 'Listen in order: ' + fixture.channelSequence.join(' → ');
+    } else if (fixture.trackSequence) {
+      sequence.textContent = 'Track tones: ' + fixture.trackSequence.join(' → ');
+    }
+    card.append(testIndex, heading, specification);
+    if (sequence.textContent) card.append(sequence);
+    card.append(trackLabel, trackSelect, trackStatus, playbackState, audio, progress, result, fixtureActions);
     container.appendChild(card);
 
     async function startPlayback() {
@@ -986,11 +1186,32 @@ ${BLADES_STYLESHEET}
       if (audio.paused || audio.ended) startPlayback();
       else audio.pause();
     });
+    trackSelect.addEventListener('change', () => {
+      const tracks = getAudioTracks();
+      const selectedIndex = Number(trackSelect.value);
+      if (!tracks || !Number.isInteger(selectedIndex) || !tracks[selectedIndex]) return;
+      tracks.forEach((track, index) => {
+        try {
+          track.enabled = index === selectedIndex;
+        } catch (_) {}
+      });
+      refreshAudioTrackSelector();
+      renderResult();
+    });
     audio.addEventListener('loadedmetadata', () => {
       state.metadata = 'loaded';
-      state.audioTracks = readAudioTracks();
+      refreshAudioTrackSelector();
       progress.max = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 1;
       renderResult();
+    });
+    ['loadeddata', 'canplay', 'durationchange'].forEach((eventName) => {
+      audio.addEventListener(eventName, () => {
+        refreshAudioTrackSelector();
+        if (eventName === 'durationchange') {
+          progress.max = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 1;
+        }
+        renderResult();
+      });
     });
     audio.addEventListener('play', () => {
       state.playback = 'play requested';
@@ -1039,6 +1260,17 @@ ${BLADES_STYLESHEET}
       playButton.textContent = 'Retry ' + testName;
       renderResult();
     });
+    try {
+      const trackList = audio.audioTracks;
+      if (trackList && typeof trackList.addEventListener === 'function') {
+        ['addtrack', 'removetrack', 'change'].forEach((eventName) => {
+          trackList.addEventListener(eventName, () => {
+            refreshAudioTrackSelector();
+            renderResult();
+          });
+        });
+      }
+    } catch (_) {}
     checkEfficiency(fixture).then((value) => {
       state.mediaCapabilities = value;
       renderResult();
@@ -1108,6 +1340,9 @@ ${folder ? `<h2>${escapeHtml(folder)}</h2>` : ""}
 </div>
 <p id="status" role="status">Direct media delivery enabled. Cloudflare authorizes the source URL, then the browser fetches media directly from the upstream.</p>
 <p id="error" role="alert" hidden>Direct playback could not start. The upstream must provide an HTTPS, browser-compatible media URL. No compatibility relay is available.</p>
+<label for="player-audio-track">Embedded audio track</label>
+<select id="player-audio-track" disabled><option value="">Track selection unavailable</option></select>
+<small id="player-audio-track-status">Track information will appear after the media metadata loads.</small>
 <div>
 <a href="/http/" role="button" class="secondary">Browse files</a>
 <a href="/diagnostics" role="button" class="secondary">Diagnostics</a>
@@ -1131,10 +1366,56 @@ ${plyrScript}
   const downloadButton = document.getElementById('download-button');
   const fullscreenButton = document.getElementById('fullscreen-button');
   const switchButton = document.getElementById('switch-player');
+  const audioTrackSelect = document.getElementById('player-audio-track');
+  const audioTrackStatus = document.getElementById('player-audio-track-status');
 
   function setStatus(message, isError = false) {
     status.textContent = message;
     status.classList.toggle('error', isError);
+  }
+
+  function getAudioTracks() {
+    try {
+      const tracks = video.audioTracks;
+      if (!tracks || typeof tracks.length !== 'number') return null;
+      return Array.from({ length: tracks.length }, (_, index) => tracks[index]);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function describeAudioTrack(track, index) {
+    const parts = [track && track.label ? track.label : 'Track ' + (index + 1)];
+    if (track && track.language) parts.push(track.language);
+    if (track && track.kind) parts.push(track.kind);
+    return parts.join(' · ');
+  }
+
+  function refreshAudioTrackSelector() {
+    const tracks = getAudioTracks();
+    audioTrackSelect.textContent = '';
+    if (!tracks) {
+      audioTrackSelect.disabled = true;
+      audioTrackSelect.append(new Option('Track selection unavailable', ''));
+      audioTrackStatus.textContent = 'This browser does not expose HTMLMediaElement.audioTracks; use its native media menu if available.';
+      return;
+    }
+    if (tracks.length === 0) {
+      audioTrackSelect.disabled = true;
+      audioTrackSelect.append(new Option('No embedded tracks reported', ''));
+      audioTrackStatus.textContent = 'The browser reported no separate embedded audio tracks.';
+      return;
+    }
+    tracks.forEach((track, index) => {
+      audioTrackSelect.append(new Option(describeAudioTrack(track, index), String(index)));
+    });
+    const enabledIndex = tracks.findIndex((track) => track && track.enabled === true);
+    const selectedIndex = enabledIndex >= 0 ? enabledIndex : 0;
+    audioTrackSelect.value = String(selectedIndex);
+    audioTrackSelect.disabled = tracks.length < 2;
+    audioTrackStatus.textContent = tracks.length > 1
+      ? 'Choose a track, then listen for its distinct audio.'
+      : 'Only one embedded audio track was reported.';
   }
 
   function savePosition() {
@@ -1143,6 +1424,7 @@ ${plyrScript}
   }
 
   video.addEventListener('loadedmetadata', () => {
+    refreshAudioTrackSelector();
     try {
       const saved = Number(localStorage.getItem(config.resumeKey));
       if (saved > 5 && (!Number.isFinite(video.duration) || saved < video.duration - 5)) {
@@ -1151,6 +1433,30 @@ ${plyrScript}
       }
     } catch (_) {}
   });
+  ['loadeddata', 'canplay'].forEach((eventName) => {
+    video.addEventListener(eventName, refreshAudioTrackSelector);
+  });
+
+  audioTrackSelect.addEventListener('change', () => {
+    const tracks = getAudioTracks();
+    const selectedIndex = Number(audioTrackSelect.value);
+    if (!tracks || !Number.isInteger(selectedIndex) || !tracks[selectedIndex]) return;
+    tracks.forEach((track, index) => {
+      try {
+        track.enabled = index === selectedIndex;
+      } catch (_) {}
+    });
+    refreshAudioTrackSelector();
+  });
+
+  try {
+    const trackList = video.audioTracks;
+    if (trackList && typeof trackList.addEventListener === 'function') {
+      ['addtrack', 'removetrack', 'change'].forEach((eventName) => {
+        trackList.addEventListener(eventName, refreshAudioTrackSelector);
+      });
+    }
+  } catch (_) {}
   video.addEventListener('timeupdate', () => {
     if (Math.floor(video.currentTime) % 5 === 0) savePosition();
   });
